@@ -1,12 +1,37 @@
 """Deep Agents 流式执行跟踪：只保留运行元数据，不记录模型内容或工具原始参数。"""
+
 import ast
+import asyncio
 import json
 import time
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
+from langgraph.errors import GraphRecursionError
+
+from scene_pilot.core.execution import (
+    ExecutionBudgetExceeded,
+    ExecutionLimits,
+    execution_scope,
+)
+from scene_pilot.core.recommendation import (
+    CandidateDraft,
+    assemble_recommendation,
+    render_recommendation,
+)
+
+SAFE_STOPS = (
+    ExecutionBudgetExceeded,
+    ModelCallLimitExceededError,
+    ToolCallLimitExceededError,
+    GraphRecursionError,
+    TimeoutError,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +45,9 @@ class RunSummary:
     input_tokens: int
     output_tokens: int
     elapsed_seconds: float
+    status: str = "completed"
+    metrics: dict = field(default_factory=dict)
+    recommendation: dict | None = None
 
 
 def _tool_status(message: Any) -> str:
@@ -47,14 +75,25 @@ def _content_as_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text")
+        return "\n".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
     return ""
 
 
 class StreamObserver:
     """消费 graph.stream(version='v2') 的 updates/messages，生成安全、可重复测试的进度记录。"""
 
-    def __init__(self, trace_dir: Path = Path("logs/agent_runs"), emit=print):
+    def __init__(
+        self,
+        trace_dir: Path = Path("logs/agent_runs"),
+        emit=print,
+        *,
+        limits: ExecutionLimits | None = None,
+        require_evidence: bool = True,
+    ):
         self.trace_dir = Path(trace_dir)
         self.emit = emit
         self.tool_started: dict[str, tuple[str, float]] = {}
@@ -71,9 +110,78 @@ class StreamObserver:
         self.trace_path = self.trace_dir / f"{self.run_id}.jsonl"
         self.started = time.perf_counter()
         self._trace_file = None
+        self.limits = limits or ExecutionLimits()
+        self.require_evidence = require_evidence
+        self.status = "completed"
+        self.metrics = {}
+        self.recommendation = None
+
+    def _finish(self, context):
+        self.metrics = dict(context.metrics)
+        if self.require_evidence:
+            plan = context.recommendation
+            if plan is None:
+                selected, seen = [], set()
+                for evidence in context.evidence.values():
+                    identity = evidence.poi_id or (evidence.name, evidence.location)
+                    if identity not in seen:
+                        selected.append(
+                            CandidateDraft(evidence_id=evidence.evidence_id)
+                        )
+                        seen.add(identity)
+                    if len(selected) == 3:
+                        break
+                plan = assemble_recommendation(
+                    context.request, [], selected, context.evidence
+                )
+                if plan.candidates:
+                    plan = plan.model_copy(update={"status": "partial"})
+                if self.status == "completed":
+                    self.status = "incomplete"
+            elif self.status != "completed":
+                plan = plan.model_copy(update={"status": "partial"})
+            self.recommendation = plan.model_dump(mode="json")
+            self.final_text = render_recommendation(plan)
+            if self.status != "completed":
+                self.final_text = (
+                    "本次规划未完整完成；以下仅展示已取得的地图证据。\n"
+                    + self.final_text
+                )
+        self._record(
+            "run_completed" if self.status == "completed" else "run_stopped",
+            status=self.status,
+            model_calls=self.model_calls,
+            tool_calls=self.tool_calls,
+            tool_failures=self.tool_failures,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            elapsed_seconds=round(time.perf_counter() - self.started, 2),
+            **self.metrics,
+        )
+
+    def _summary(self):
+        return RunSummary(
+            run_id=self.run_id,
+            final_text=self.final_text,
+            trace_path=self.trace_path,
+            model_calls=self.model_calls,
+            tool_calls=self.tool_calls,
+            tool_failures=self.tool_failures,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            elapsed_seconds=round(time.perf_counter() - self.started, 2),
+            status=self.status,
+            metrics=self.metrics,
+            recommendation=self.recommendation,
+        )
 
     def _record(self, event: str, **fields) -> None:
-        data = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "run_id": self.run_id, "event": event, **fields}
+        data = {
+            "time": datetime.now(UTC).isoformat(timespec="seconds"),
+            "run_id": self.run_id,
+            "event": event,
+            **fields,
+        }
         self._trace_file.write(json.dumps(data, ensure_ascii=False) + "\n")
         self._trace_file.flush()
 
@@ -93,9 +201,15 @@ class StreamObserver:
             self.tool_started[call_id] = (name, time.perf_counter())
             self.tool_calls += 1
             if name == "task":
-                subagent = str((call.get("args") or {}).get("subagent_type", "unknown"))[:60]
+                subagent = str(
+                    (call.get("args") or {}).get("subagent_type", "unknown")
+                )[:60]
                 self.emit(f"  → 委派子 Agent：{subagent}")
-                self._record("subagent_delegated", scope=self._scope(namespace), subagent=subagent)
+                self._record(
+                    "subagent_delegated",
+                    scope=self._scope(namespace),
+                    subagent=subagent,
+                )
             else:
                 self.emit(f"  → [{self._scope(namespace)}] 调用工具：{name}")
                 self._record("tool_requested", scope=self._scope(namespace), tool=name)
@@ -106,13 +220,24 @@ class StreamObserver:
             if call_id in self.tool_finished:
                 return
             self.tool_finished.add(call_id)
-            tool_name, start = self.tool_started.get(call_id, (str(getattr(message, "name", "tool"))[:80], time.perf_counter()))
+            tool_name, start = self.tool_started.get(
+                call_id,
+                (str(getattr(message, "name", "tool"))[:80], time.perf_counter()),
+            )
             duration_ms = round((time.perf_counter() - start) * 1000)
             status = _tool_status(message)
             if status == "error":
                 self.tool_failures += 1
-            self.emit(f"  {'✗' if status == 'error' else '✓'} 工具完成：{tool_name} | {status} | {duration_ms} ms")
-            self._record("tool_completed", scope=self._scope(namespace), tool=tool_name, status=status, elapsed_ms=duration_ms)
+            self.emit(
+                f"  {'✗' if status == 'error' else '✓'} 工具完成：{tool_name} | {status} | {duration_ms} ms"
+            )
+            self._record(
+                "tool_completed",
+                scope=self._scope(namespace),
+                tool=tool_name,
+                status=status,
+                elapsed_ms=duration_ms,
+            )
 
         if message_type != "ai":
             return
@@ -132,17 +257,28 @@ class StreamObserver:
     def _consume(self, part: dict) -> None:
         if not isinstance(part, dict):
             return
-        mode, namespace, payload = part.get("type"), tuple(part.get("ns") or ()), part.get("data")
+        mode, namespace, payload = (
+            part.get("type"),
+            tuple(part.get("ns") or ()),
+            part.get("data"),
+        )
         if mode == "messages":
-            if namespace not in self.active_llm_scopes and isinstance(payload, (tuple, list)) and len(payload) == 2:
+            if (
+                namespace not in self.active_llm_scopes
+                and isinstance(payload, (tuple, list))
+                and len(payload) == 2
+            ):
                 chunk, _metadata = payload
-                if getattr(chunk, "type", "") in ("AIMessageChunk", "ai") or chunk.__class__.__name__ == "AIMessageChunk":
+                if (
+                    getattr(chunk, "type", "") in ("AIMessageChunk", "ai")
+                    or chunk.__class__.__name__ == "AIMessageChunk"
+                ):
                     self.active_llm_scopes.add(namespace)
                     self.emit(f"  … [{self._scope(namespace)}] 模型正在生成响应")
             return
         if mode != "updates" or not isinstance(payload, dict):
             return
-        for node_name, state_update in payload.items():
+        for state_update in payload.values():
             if not isinstance(state_update, dict):
                 continue
             messages = state_update.get("messages") or []
@@ -151,60 +287,86 @@ class StreamObserver:
             for message in messages:
                 self._handle_message(message, namespace)
 
-    def run(self, agent, request: str, recursion_limit: int = 60) -> RunSummary:
+    def run(
+        self, agent, request: str, recursion_limit: int | None = None
+    ) -> RunSummary:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
-        with self.trace_path.open("w", encoding="utf-8") as trace_file:
+        self.started = time.perf_counter()
+        with (
+            execution_scope(request, self.limits) as context,
+            self.trace_path.open("w", encoding="utf-8") as trace_file,
+        ):
             self._trace_file = trace_file
             self._record("run_started")
             try:
-                for part in agent.stream({"messages": [{"role": "user", "content": request}]}, config={"recursion_limit": recursion_limit}, stream_mode=["updates", "messages"], subgraphs=True, version="v2"):
-                    self._consume(part)
-                self._record("run_completed", model_calls=self.model_calls, tool_calls=self.tool_calls, tool_failures=self.tool_failures, input_tokens=self.input_tokens, output_tokens=self.output_tokens)
-            except Exception as exc:
-                self._record("run_failed", error_type=type(exc).__name__)
-                raise
-            finally:
-                self._trace_file = None
-        return RunSummary(run_id=self.run_id, final_text=self.final_text, trace_path=self.trace_path, model_calls=self.model_calls, tool_calls=self.tool_calls, tool_failures=self.tool_failures, input_tokens=self.input_tokens, output_tokens=self.output_tokens, elapsed_seconds=round(time.perf_counter() - self.started, 2))
-
-    async def arun(self, agent, request: str, recursion_limit: int = 60) -> RunSummary:
-        """消费异步 LangGraph v2 流，供 MCP 异步工具使用。"""
-        self.trace_dir.mkdir(parents=True, exist_ok=True)
-        self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
-        with self.trace_path.open("w", encoding="utf-8") as trace_file:
-            self._trace_file = trace_file
-            self._record("run_started")
-            try:
-                async for part in agent.astream(
+                if len(request) > self.limits.max_input_chars:
+                    raise ExecutionBudgetExceeded("request_too_long")
+                for part in agent.stream(
                     {"messages": [{"role": "user", "content": request}]},
-                    config={"recursion_limit": recursion_limit},
+                    config={
+                        "recursion_limit": recursion_limit
+                        or self.limits.recursion_limit
+                    },
                     stream_mode=["updates", "messages"],
                     subgraphs=True,
                     version="v2",
                 ):
                     self._consume(part)
-                self._record(
-                    "run_completed",
-                    model_calls=self.model_calls,
-                    tool_calls=self.tool_calls,
-                    tool_failures=self.tool_failures,
-                    input_tokens=self.input_tokens,
-                    output_tokens=self.output_tokens,
-                )
+                    if time.perf_counter() - self.started > self.limits.timeout_seconds:
+                        raise ExecutionBudgetExceeded("elapsed_time")
+            except SAFE_STOPS as exc:
+                self.status = "budget_exhausted"
+                self._record("budget_stop", reason=type(exc).__name__)
             except Exception as exc:
+                self.status = "failed"
                 self._record("run_failed", error_type=type(exc).__name__)
                 raise
             finally:
+                self._finish(context)
                 self._trace_file = None
-        return RunSummary(
-            run_id=self.run_id,
-            final_text=self.final_text,
-            trace_path=self.trace_path,
-            model_calls=self.model_calls,
-            tool_calls=self.tool_calls,
-            tool_failures=self.tool_failures,
-            input_tokens=self.input_tokens,
-            output_tokens=self.output_tokens,
-            elapsed_seconds=round(time.perf_counter() - self.started, 2),
-        )
+        return self._summary()
+
+    async def arun(
+        self, agent, request: str, recursion_limit: int | None = None
+    ) -> RunSummary:
+        """消费异步 LangGraph v2 流，供 MCP 异步工具使用。"""
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+        self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
+        self.started = time.perf_counter()
+        with (
+            execution_scope(request, self.limits) as context,
+            self.trace_path.open("w", encoding="utf-8") as trace_file,
+        ):
+            self._trace_file = trace_file
+            self._record("run_started")
+            try:
+                if len(request) > self.limits.max_input_chars:
+                    raise ExecutionBudgetExceeded("request_too_long")
+                async with asyncio.timeout(self.limits.timeout_seconds):
+                    async for part in agent.astream(
+                        {"messages": [{"role": "user", "content": request}]},
+                        config={
+                            "recursion_limit": recursion_limit
+                            or self.limits.recursion_limit
+                        },
+                        stream_mode=["updates", "messages"],
+                        subgraphs=True,
+                        version="v2",
+                    ):
+                        self._consume(part)
+            except SAFE_STOPS as exc:
+                self.status = "budget_exhausted"
+                self._record("budget_stop", reason=type(exc).__name__)
+            except asyncio.CancelledError:
+                self.status = "cancelled"
+                self._record("run_cancelled")
+                raise
+            except Exception as exc:
+                self.status = "failed"
+                self._record("run_failed", error_type=type(exc).__name__)
+                raise
+            finally:
+                self._finish(context)
+                self._trace_file = None
+        return self._summary()

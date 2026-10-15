@@ -1,5 +1,7 @@
 """ScenePilot CLI：通过异步 Deep Agents + MCP 运行人像拍摄选景调研。"""
+
 import asyncio
+
 from scene_pilot.agent import build_scene_pilot_agent
 from scene_pilot.core.config import get_settings
 from scene_pilot.observability.streaming import StreamObserver
@@ -11,10 +13,10 @@ async def run_cli() -> None:
         print("请在项目根目录 .env 中配置 DASHSCOPE_API_KEY 和 AMAP_WEB_KEY")
         return
 
-    print("ScenePilot V0.3（人像约拍选景）。正在连接高德 MCP，请稍候……")
+    print("ScenePilot V0.3.1（人像约拍选景）。正在连接高德 MCP，请稍候……")
     try:
         agent = await build_scene_pilot_agent()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI privacy boundary
         # MCP 请求 URL 包含 Key，不打印原始异常文本。
         print(f"初始化失败：{type(exc).__name__}。请检查网络、MCP 连接和 .env 配置。")
         return
@@ -37,8 +39,10 @@ async def run_cli() -> None:
         except KeyboardInterrupt:
             print("\n已取消本次任务；已经发出的 API 请求不会自动撤销。")
             continue
-        except Exception as exc:
-            print(f"执行失败：{type(exc).__name__}。安全 Trace 路径：{observer.trace_path}")
+        except Exception as exc:  # noqa: BLE001 - CLI privacy boundary
+            print(
+                f"执行失败：{type(exc).__name__}。安全 Trace 路径：{observer.trace_path}"
+            )
             continue
 
         print("\n===== ScenePilot 选景建议 =====")
@@ -49,7 +53,16 @@ async def run_cli() -> None:
             f"耗时：{summary.elapsed_seconds}s"
         )
         print(f"[安全 Trace] {summary.trace_path}")
-        print("说明：未接入实拍图核验、精准天气或太阳位置计算；地图调用量受高德账号额度约束。")
+        print(
+            f"[预算/缓存] 状态：{summary.status} | "
+            f"地图尝试：{summary.metrics.get('map_attempts', 0)} | "
+            f"缓存命中：{summary.metrics.get('cache_hits', 0)} | "
+            f"重试：{summary.metrics.get('map_retries', 0)} | "
+            f"缺失用量统计的模型响应：{summary.metrics.get('usage_missing', 0)}"
+        )
+        print(
+            "说明：未接入实拍图核验、精准天气或太阳位置计算；地图调用量受高德账号额度约束。"
+        )
 
 
 def main() -> None:

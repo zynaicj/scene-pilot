@@ -1,4 +1,5 @@
 """高德 MCP 工具白名单、并发/重试与错误安全性测试（完全离线）。"""
+
 import asyncio
 import unittest
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel
 
+from scene_pilot.core.execution import execution_scope
 from scene_pilot.integrations.amap_mcp import (
     AmapMCPError,
     _transient_transport_error,
@@ -45,8 +47,12 @@ class AmapMCPTests(unittest.TestCase):
             SimpleNamespace(name="execute"),
         ]
         scene, route = select_amap_tools(tools)
-        self.assertEqual([t.name for t in scene], ["maps_text_search", "maps_search_detail"])
-        self.assertEqual([t.name for t in route], ["maps_direction_driving", "maps_geo"])
+        self.assertEqual(
+            [t.name for t in scene], ["maps_text_search", "maps_search_detail"]
+        )
+        self.assertEqual(
+            [t.name for t in route], ["maps_direction_driving", "maps_geo"]
+        )
 
     def test_missing_core_tools(self):
         with self.assertRaises(AmapMCPError):
@@ -111,29 +117,38 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_tools_without_network(self):
         async def lookup(keywords: str):
-            return f"找到 {keywords}"
+            return {"pois": [{"id": "B001", "name": keywords}]}
+
         tools = [
             mock_map_tool("maps_text_search", lookup),
             mock_map_tool("maps_direction_driving", lookup),
         ]
         fake = SimpleNamespace(get_tools=AsyncMock(return_value=tools))
-        with patch("scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
+        with patch(
+            "scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake
+        ):
             scene, route = await load_amap_tools("test-key")
             self.assertEqual(len(scene), 1)
             self.assertEqual(len(route), 1)
-            result = await scene[0].ainvoke({"keywords": "杭州公园"})
+            with execution_scope("杭州"):
+                result = await scene[0].ainvoke({"keywords": "杭州公园"})
             self.assertIn("杭州公园", str(result))
             fake.get_tools.assert_awaited_once_with(server_name="amap")
 
     async def test_redact_connection_errors(self):
-        fake = SimpleNamespace(get_tools=AsyncMock(side_effect=RuntimeError("secret-api-key in url")))
-        with patch("scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
+        fake = SimpleNamespace(
+            get_tools=AsyncMock(side_effect=RuntimeError("secret-api-key in url"))
+        )
+        with patch(
+            "scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake
+        ):
             with self.assertRaises(AmapMCPError) as caught:
                 await load_amap_tools("secret-api-key")
             self.assertNotIn("secret-api-key", str(caught.exception))
 
     async def test_transport_disconnect_recovers(self):
         calls = 0
+
         async def lookup(keywords: str):
             nonlocal calls
             calls += 1
@@ -149,6 +164,7 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exhausted_retries_report_safe_error(self):
         calls = 0
+
         async def lookup(keywords: str):
             nonlocal calls
             calls += 1
@@ -164,6 +180,7 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_error_is_not_retried(self):
         calls = 0
+
         async def lookup(keywords: str):
             nonlocal calls
             calls += 1
@@ -180,6 +197,7 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_tools_share_semaphore(self):
         active = 0
         peak = 0
+
         async def lookup(keywords: str):
             nonlocal active, peak
             active += 1
@@ -191,10 +209,9 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
         first = mock_map_tool("maps_text_search", lookup)
         second = mock_map_tool("maps_direction_driving", lookup)
         protected = protect_amap_tools([first, second], max_concurrency=1)
-        result = await asyncio.gather(*[
-            protected[i % 2].ainvoke({"keywords": str(i)})
-            for i in range(5)
-        ])
+        result = await asyncio.gather(
+            *[protected[i % 2].ainvoke({"keywords": str(i)}) for i in range(5)]
+        )
         self.assertEqual(peak, 1)
         self.assertEqual(len(result), 5)
 
