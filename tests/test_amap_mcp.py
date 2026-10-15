@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel
 
 from scene_pilot.integrations.amap_mcp import (
@@ -68,6 +68,47 @@ class AmapMCPTests(unittest.TestCase):
 
 
 class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_adapter_handled_error_does_not_leak_content(self):
+        async def lookup(keywords: str):
+            raise ToolException("https://mcp.amap.com/?key=private")
+
+        source = mock_map_tool("maps_text_search", lookup)
+        source.handle_tool_error = True
+        result = await protect_amap_tools([source])[0].ainvoke({"keywords": "公园"})
+        self.assertEqual(result["status"], "error")
+        self.assertNotIn("private", str(result))
+
+    async def test_structured_artifact_is_preserved(self):
+        async def lookup(keywords: str):
+            return "display", {"structured_content": {"pois": [{"name": keywords}]}}
+
+        source = mock_map_tool("maps_text_search", lookup)
+        source.response_format = "content_and_artifact"
+        result = await protect_amap_tools([source])[0].ainvoke({"keywords": "公园"})
+        self.assertEqual(result["pois"][0]["name"], "公园")
+
+    async def test_cancellation_releases_semaphore(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def lookup(keywords: str):
+            if keywords == "wait":
+                started.set()
+                try:
+                    await asyncio.sleep(10)
+                finally:
+                    cancelled.set()
+            return keywords
+
+        guarded = protect_amap_tools([mock_map_tool("maps_text_search", lookup)])[0]
+        pending = asyncio.create_task(guarded.ainvoke({"keywords": "wait"}))
+        await started.wait()
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(await guarded.ainvoke({"keywords": "next"}), "next")
+
     async def test_load_tools_without_network(self):
         async def lookup(keywords: str):
             return f"找到 {keywords}"

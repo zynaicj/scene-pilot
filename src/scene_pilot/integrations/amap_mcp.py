@@ -3,8 +3,10 @@
 高德 Web Key 只参与构造客户端 URL，不写入 Trace、模型消息或异常输出。
 """
 import asyncio
+import uuid
 from urllib.parse import quote
 
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -75,10 +77,25 @@ def protect_amap_tools(
             async with semaphore:
                 for attempt in range(max_retries + 1):
                     try:
-                        return await asyncio.wait_for(
-                            tool.ainvoke(kwargs),
+                        result = await asyncio.wait_for(
+                            tool.ainvoke({
+                                "type": "tool_call",
+                                "id": uuid.uuid4().hex,
+                                "name": tool.name,
+                                "args": kwargs,
+                            }),
                             timeout=timeout_seconds,
                         )
+                        # A ToolCall retains the adapter's error status and structured
+                        # artifact. Invoking with plain args silently loses both.
+                        if isinstance(result, ToolMessage):
+                            if result.status == "error":
+                                raise ValueError("MCP provider rejected the request")
+                            artifact = result.artifact
+                            if isinstance(artifact, dict) and "structured_content" in artifact:
+                                return artifact["structured_content"]
+                            return result.content
+                        return result
                     except Exception as exc:
                         transient = _transient_transport_error(exc)
                         if transient and attempt < max_retries:
@@ -117,7 +134,7 @@ def build_amap_mcp_client(api_key: str) -> MultiServerMCPClient:
     url = f"https://mcp.amap.com/mcp?key={quote(api_key.strip(), safe='')}"
     return MultiServerMCPClient(
         {"amap": {"transport": "http", "url": url}},
-        handle_tool_errors=True,
+        handle_tool_errors=False,
     )
 
 
@@ -136,7 +153,10 @@ def select_amap_tools(tools: list[BaseTool]) -> tuple[list[BaseTool], list[BaseT
 async def load_amap_tools(api_key: str) -> tuple[list[BaseTool], list[BaseTool]]:
     client = build_amap_mcp_client(api_key)
     try:
-        all_tools = await client.get_tools(server_name="amap")
+        all_tools = await asyncio.wait_for(
+            client.get_tools(server_name="amap"),
+            timeout=MCP_CALL_TIMEOUT_SECONDS,
+        )
     except Exception:
         # HTTP URL 可能包含 Key，所以绝不传播原始异常的文本或堆栈。
         raise AmapMCPError("连接高德 MCP 失败；请检查网络、Key、额度及服务状态") from None
