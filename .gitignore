@@ -17,8 +17,9 @@ htmlcov/
 # PyCharm
 .idea/
 
-# Logs
+# Logs and traces
 *.log
+logs/
 
 # Local databases
 *.db

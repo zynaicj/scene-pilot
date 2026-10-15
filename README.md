@@ -33,3 +33,16 @@
 执行：uv run python -m unittest discover -s tests -v
 
 测试模拟高德响应，不消耗 API 配额。后续计划增加结构化需求、多人硬约束、预算明细、状态持久化和动态重规划。
+
+
+## V0.2.1：流式进度与安全 Trace
+
+输入需求后，命令行会在 Agent 执行期间逐步输出 Supervisor / Subagent 的工具委派和执行进度，不再等整个任务结束后才显示信息。
+
+`uv run group-pilot`
+
+运行时自动创建 `logs/agent_runs/<run_id>.jsonl`，记录工具名称、执行阶段、粗略耗时、模型调用次数及模型提供的 Token 用量；**不会写入模型对话、工具原始参数、原始结果和 API Key**。日志目录被 Git 忽略。工具返回无结构化状态时记录为 `executed`，不等价于业务成功。实际使用时请注意不要将包含隐私的终端输出公开分享。
+
+`uv run python -m unittest discover -s tests -v`
+
+流式测试基于模拟事件，真实 Qwen + 高德流式联调需在本地完成。当前记录的工具耗时来自流式事件之间的时间差，可能包含调度延迟，不能完全代表第三方 API 延迟。暂未实现跨轮持久化与结构化行程。
