@@ -2,7 +2,7 @@
 import unittest
 from datetime import date
 from pydantic import ValidationError
-from group_pilot.core.photography import PhotographyBrief, make_verification_queries
+from scene_pilot.core.photography import PhotographyBrief, make_verification_queries
 
 
 class PhotographyBriefTests(unittest.TestCase):

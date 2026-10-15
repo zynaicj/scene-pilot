@@ -1,11 +1,11 @@
 """ScenePilot 主 Agent：Deep Agents 自主规划 + 按职责委派 + 免费地图 MCP。"""
 from deepagents import create_deep_agent
 from langchain.agents.middleware import TodoListMiddleware
-from group_pilot.agents.subagents import build_subagents
-from group_pilot.core.config import get_settings
-from group_pilot.core.llm import create_qwen_model
-from group_pilot.integrations.amap_mcp import load_amap_tools
-from group_pilot.tools.photography_tools import prepare_photography_brief, recommend_scene_verification
+from scene_pilot.agents.subagents import build_subagents
+from scene_pilot.core.config import get_settings
+from scene_pilot.core.llm import create_qwen_model
+from scene_pilot.integrations.amap_mcp import load_amap_tools
+from scene_pilot.tools.photography_tools import prepare_photography_brief, recommend_scene_verification
 
 
 SUPERVISOR_PROMPT = """你是 ScenePilot（光影选景师），为人像约拍摄影师提供场景调研和拍摄策划。
@@ -33,7 +33,3 @@ async def build_scene_pilot_agent():
         middleware=[TodoListMiddleware()],
         system_prompt=SUPERVISOR_PROMPT,
     )
-
-
-# 兼容由旧代码引用的函数名，返回值仍为可等待对象。
-build_group_pilot_agent = build_scene_pilot_agent

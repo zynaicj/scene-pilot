@@ -1,5 +1,5 @@
 [project]
-name = "group-pilot"
+name = "scene-pilot"
 version = "0.3.0"
 description = "ScenePilot: MCP-powered multi-agent portrait photography location planner"
 authors = [
@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.scripts]
-group-pilot = "group_pilot.main:main"
+scene-pilot-check-model = "scene_pilot.diagnostics:main"
+scene-pilot = "scene_pilot.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]

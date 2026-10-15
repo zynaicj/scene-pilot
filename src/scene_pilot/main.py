@@ -1,8 +1,8 @@
 """ScenePilot CLI：通过异步 Deep Agents + MCP 运行人像拍摄选景调研。"""
 import asyncio
-from group_pilot.agent import build_scene_pilot_agent
-from group_pilot.core.config import get_settings
-from group_pilot.observability.streaming import StreamObserver
+from scene_pilot.agent import build_scene_pilot_agent
+from scene_pilot.core.config import get_settings
+from scene_pilot.observability.streaming import StreamObserver
 
 
 async def run_cli() -> None:

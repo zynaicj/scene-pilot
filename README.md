@@ -1,52 +1,89 @@
 # ScenePilot · 光影选景师
 
-基于 **Deep Agents + Qwen + 高德地图官方 MCP** 的人像约拍摄影场景调研与拍摄策划系统。前身为 GroupPilot 团体出行 Agent，沿用其多 Agent 编排与可观测性代码，目前为 **V0.3 开发分支**。
+**基于 Deep Agents、Qwen 和高德官方 MCP 的智能人像约拍场景规划后端。**
 
-> 定位：摄影师根据模特妆造、服饰、目标拍摄风格、参考照片文字描述、场景、光线、预算和地理约束，搜索真实候选地点、核对驾车路线，获得拍摄建议与需人工确认的事项。
+摄影师输入模特妆造、服饰、摄影风格、场景偏好、自然光线、预算和交通限制，ScenePilot 分析创作意图、调研真实拍摄地点及可查询的驾车路线，并提供拍摄建议与人工实拍核验关键词。
 
-## 当前支持
+当前版本：**V0.3（后端）**。暂不开发前端，未来将增加 FastAPI 接口、持久化和多模态图片理解。
 
-- Deep Agents 主 Agent：`write_todos` 规划任务、`task` 委派专业子 Agent。
-- Style Agent：理解**文字描述**中的妆造、服饰、风格与光线需求。
-- Scene Agent：通过官方高德地图 MCP 地点检索；Route Agent 负责可选的驾车路线查询。
-- Pydantic `PhotographyBrief`：对城市、风格、预算、时间、拍摄团队、设备与场地偏好进行结构化验证。
-- 手动实拍核验：对未知现场视觉效果，给出小红书、抖音等社交平台可复制的搜索词，**不爬取、不声称核实过实拍图**。
-- LangGraph v2 异步流式进度、元数据 Trace 和离线单元测试。
+## 功能
 
-尚未支持照片上传和实际图像识别；未接入准确天气预报、黄金时刻计算、现场实拍图、门票与场地收费、商业摄影许可数据库、持久化会话。相关信息不得凭空确认。
+- Deep Agents 主 Agent：`write_todos` 任务拆解与 `task` 子 Agent 委派。
+- Style Agent：分析文字描述的妆造、服饰、摄影风格、背景与光线需求。
+- Scene Agent：通过高德官方 MCP 检索真实 POI。
+- Route Agent：已知出发地时调用 MCP 查询单程驾车路线。
+- Pydantic `PhotographyBrief`：结构化地点、风格、日期、预算、器材、团队和场地条件。
+- 实拍核验工具：生成适合在小红书、抖音等平台**人工搜索**的关键词，不抓取网站、不声称已核验实拍图片。
+- 流式执行与安全 Trace：记录工具事件、调用次数和模型可用的 Token 统计，不保存用户原始输入及密钥。
 
-## 本地启动（Windows PyCharm / Python 3.12 / uv）
+## 本地环境
 
-1. 在高德开放平台申请**Web 服务 Key**，并在控制台确认可使用个人开发阶段的免费额度。
-2. 在项目根目录保留本地 `.env`，配置 `DASHSCOPE_API_KEY`、`QWEN_MODEL`、`QWEN_BASE_URL`、`AMAP_WEB_KEY`。不要提交 `.env`，旧 Key 如曾出现在截图应轮换。
-3. 首次拉取 V0.3 开发分支后运行 `uv sync`（自动解析新增 MCP 适配器依赖并更新本地 `uv.lock`）。
-4. 执行 `uv run python -m unittest discover -s tests -v`，本地测试不需要真实密钥。
-5. 运行 `uv run group-pilot`，终端标题为 ScenePilot；Python 运行入口仍保持兼容旧命令。
+需要 Python 3.12、uv、可用的百炼 Qwen API Key，以及在高德开放平台申请的 Web 服务 Key。
 
-示例输入：
+```powershell
+uv sync
+```
 
-> 在杭州拍日系清新写真，模特穿白色棉麻连衣裙，淡妆、披发，希望树林、草地和柔和逆光；从浙江理工大学下沙校区出发，单程驾车最好不超过 40 分钟，预算 300 元。请搜索真实候选地点并提供现场核验关键词。
+如果根目录没有 `.env`，可从 `.env.example` 复制；已经有 `.env` 的用户**不要覆盖**原有文件：
 
-## MCP 与费用说明
+```dotenv
+DASHSCOPE_API_KEY=仅在本地填写
+QWEN_MODEL=填写你当前能正常调用的模型
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AMAP_WEB_KEY=仅在本地填写
+```
 
-使用 [高德官方 MCP Server](https://developer.amap.com/api/mcp-server/gettingstarted)，通过 Streamable HTTP 连接：`https://mcp.amap.com/mcp?key=...`。密钥**只在本地运行时拼装，绝不写进代码、终端日志或 Trace**。
+不要上传真实 API Key、含密钥的截图或者完整敏感错误 URL。
 
-客户端采用 `langchain-mcp-adapters` 的 `MultiServerMCPClient`。仅允许检索与路线所需工具：`maps_text_search`、`maps_around_search`、`maps_search_detail`、`maps_geo` 和 `maps_direction_driving`。连接失败时停止，不会自动使用假地图数据。
+先做一次真实模型连通性诊断（可能消耗模型额度）：
 
-**MCP 协议不等于免费 API**：高德服务在账号许可和免费额度范围内可免费使用，Qwen 模型调用费用取决于你的百炼账户和模型套餐。请遵守外部服务商政策。
+```powershell
+uv run scene-pilot-check-model
+```
 
-## 核心代码
+运行无需外部密钥的单元测试：
 
-- `src/group_pilot/core/photography.py`：摄影需求数据模型及人工核验关键词。
-- `src/group_pilot/agent.py`：摄影策划 Supervisor。
-- `src/group_pilot/agents/subagents.py`：Style、Scene、Route 子 Agent。
-- `src/group_pilot/integrations/amap_mcp.py`：官方高德 MCP 客户端和工具白名单。
-- `src/group_pilot/tools/photography_tools.py`：结构化需求工具和人工核验工具。
-- `src/group_pilot/observability/streaming.py`：异步流式执行、工具和 Token 统计。
-- `src/group_pilot/main.py`：命令行入口。
+```powershell
+uv run python -m unittest discover -s tests -v
+```
 
-`logs/` 和 `.env` 均被 Git 忽略。Trace 保存执行元数据而非用户原始需求。外部 MCP 真实连通性与 Qwen 联调需要在你本机配置密钥后验收。
+运行摄影选景：
 
-## 开发状态
+```powershell
+uv run scene-pilot
+```
 
-V0.3 首先解决**文本摄影意图 → 真实地图选景 → 合理建议和人工核验**这一闭环；后续添加免费天气 MCP、本地 Astral 黄金时刻工具、预算/时间确定性校验和多模态参考图片理解。
+也可以运行 `uv run python -m scene_pilot.main`。
+
+输入例子：
+
+> 我想在杭州拍日系清新写真，模特穿白色连衣裙，淡妆自然披发，希望有树林、草地和柔和逆光。从下沙出发，单程驾车不超过 40 分钟，预算 300 元。请寻找真实候选拍摄地点并给出实拍核验关键词。
+
+## 工程目录
+
+```text
+src/scene_pilot/
+  agent.py                   # Photography Supervisor
+  agents/subagents.py        # Style / Scene / Route 子 Agent
+  core/photography.py        # 摄影需求数据模型
+  core/config.py             # 从 .env 加载运行配置
+  core/llm.py                # Qwen 连接
+  integrations/amap_mcp.py   # 高德官方 MCP
+  tools/photography_tools.py # 需求与实拍核验工具
+  observability/streaming.py # 安全流式执行 Trace
+  diagnostics.py             # 单次模型连通性诊断
+  main.py                    # CLI
+tests/                       # 无 Key 单元测试
+docs/ARCHITECTURE.md         # 架构及下一步路线
+AGENTS.md                    # Work / 开发者项目说明
+```
+
+## 费用与边界
+
+高德地图受个人账户免费额度和使用许可约束；MCP 是通信协议，不等于第三方接口永久免费。Qwen 模型是否计费取决于所用模型及百炼账户的可用额度。
+
+当前只理解**文字描述**，不能实际识别模特照片或参考图片；也没有接入实时天气、太阳位置计算、场地商业拍摄许可、真实票价、数据库或 HTTP API。
+
+地点名称与路线可能来自地图接口，但**不能据此保证某处具备期待的机位、植被、光线或免费开放**。没有现场图像证据时，建议摄影师在社交媒体搜索近期实拍图进行确认。
+
+更多设计见 `docs/ARCHITECTURE.md`。

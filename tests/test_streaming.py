@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from group_pilot.observability.streaming import StreamObserver, _tool_status
+from scene_pilot.observability.streaming import StreamObserver, _tool_status
 
 
 class FakeAgent:

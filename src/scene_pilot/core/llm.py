@@ -1,6 +1,6 @@
 """统一创建 Qwen 模型。"""
 from langchain_openai import ChatOpenAI
-from group_pilot.core.config import Settings
+from scene_pilot.core.config import Settings
 
 
 def create_qwen_model(settings: Settings) -> ChatOpenAI:

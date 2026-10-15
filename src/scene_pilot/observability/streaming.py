@@ -153,7 +153,7 @@ class StreamObserver:
 
     def run(self, agent, request: str, recursion_limit: int = 60) -> RunSummary:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
-        self.emit(f"\n[GroupPilot] 正在规划，运行 ID：{self.run_id}")
+        self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
         with self.trace_path.open("w", encoding="utf-8") as trace_file:
             self._trace_file = trace_file
             self._record("run_started")

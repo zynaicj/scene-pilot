@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from group_pilot.observability.streaming import StreamObserver
+from scene_pilot.observability.streaming import StreamObserver
 
 
 class FakeAsyncAgent:

@@ -1,6 +1,6 @@
 """摄影需求校验和场景人工核验建议，均为本地免费工具。"""
 from langchain_core.tools import tool
-from group_pilot.core.photography import PhotographyBrief, make_verification_queries
+from scene_pilot.core.photography import PhotographyBrief, make_verification_queries
 
 
 @tool(args_schema=PhotographyBrief)

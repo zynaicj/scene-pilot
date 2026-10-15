@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from group_pilot.integrations.amap_mcp import (
+from scene_pilot.integrations.amap_mcp import (
     AmapMCPError, build_amap_mcp_client, load_amap_tools, select_amap_tools,
 )
 
@@ -36,7 +36,7 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(name="maps_text_search"),
             SimpleNamespace(name="maps_direction_driving"),
         ]))
-        with patch("group_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
+        with patch("scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
             scene, route = await load_amap_tools("test-key")
             self.assertEqual(len(scene), 1)
             self.assertEqual(len(route), 1)
@@ -44,7 +44,7 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_redact_connection_errors(self):
         fake = SimpleNamespace(get_tools=AsyncMock(side_effect=RuntimeError("secret-api-key in url")))
-        with patch("group_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
+        with patch("scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake):
             with self.assertRaises(AmapMCPError) as caught:
                 await load_amap_tools("secret-api-key")
             self.assertNotIn("secret-api-key", str(caught.exception))
