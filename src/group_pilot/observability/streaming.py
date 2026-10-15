@@ -167,3 +167,44 @@ class StreamObserver:
             finally:
                 self._trace_file = None
         return RunSummary(run_id=self.run_id, final_text=self.final_text, trace_path=self.trace_path, model_calls=self.model_calls, tool_calls=self.tool_calls, tool_failures=self.tool_failures, input_tokens=self.input_tokens, output_tokens=self.output_tokens, elapsed_seconds=round(time.perf_counter() - self.started, 2))
+
+    async def arun(self, agent, request: str, recursion_limit: int = 60) -> RunSummary:
+        """消费异步 LangGraph v2 流，供 MCP 异步工具使用。"""
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+        self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
+        with self.trace_path.open("w", encoding="utf-8") as trace_file:
+            self._trace_file = trace_file
+            self._record("run_started")
+            try:
+                async for part in agent.astream(
+                    {"messages": [{"role": "user", "content": request}]},
+                    config={"recursion_limit": recursion_limit},
+                    stream_mode=["updates", "messages"],
+                    subgraphs=True,
+                    version="v2",
+                ):
+                    self._consume(part)
+                self._record(
+                    "run_completed",
+                    model_calls=self.model_calls,
+                    tool_calls=self.tool_calls,
+                    tool_failures=self.tool_failures,
+                    input_tokens=self.input_tokens,
+                    output_tokens=self.output_tokens,
+                )
+            except Exception as exc:
+                self._record("run_failed", error_type=type(exc).__name__)
+                raise
+            finally:
+                self._trace_file = None
+        return RunSummary(
+            run_id=self.run_id,
+            final_text=self.final_text,
+            trace_path=self.trace_path,
+            model_calls=self.model_calls,
+            tool_calls=self.tool_calls,
+            tool_failures=self.tool_failures,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            elapsed_seconds=round(time.perf_counter() - self.started, 2),
+        )

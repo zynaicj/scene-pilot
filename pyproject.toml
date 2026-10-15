@@ -1,7 +1,7 @@
 [project]
 name = "group-pilot"
-version = "0.1.0"
-description = "Multi-agent group outing planner powered by Deep Agents and Qwen"
+version = "0.3.0"
+description = "ScenePilot: MCP-powered multi-agent portrait photography location planner"
 authors = [
     { name = "zynaicj", email = "1471492469@qq.com" }
 ]
@@ -10,6 +10,8 @@ dependencies = [
     "deepagents>=0.7.25",
     "langchain-openai>=1.7.2",
     "python-dotenv>=1.2.4",
+    "pydantic>=2.12,<3",
+    "langchain-mcp-adapters>=0.3.2,<0.4",
 ]
 
 [project.scripts]
