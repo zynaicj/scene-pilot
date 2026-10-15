@@ -2,6 +2,7 @@
 
 高德 Web Key 只参与构造客户端 URL，不写入 Trace、模型消息或异常输出。
 """
+
 import asyncio
 import uuid
 from urllib.parse import quote
@@ -10,8 +11,13 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from scene_pilot.core.execution import CURRENT_RUN
+from scene_pilot.integrations.amap_policy import govern_amap_tools
+from scene_pilot.integrations.amap_results import safe_error
 
-SCENE_TOOL_NAMES = frozenset({"maps_text_search", "maps_around_search", "maps_search_detail"})
+SCENE_TOOL_NAMES = frozenset(
+    {"maps_text_search", "maps_around_search", "maps_search_detail"}
+)
 ROUTE_TOOL_NAMES = frozenset({"maps_geo", "maps_direction_driving"})
 ALLOWED_TOOL_NAMES = SCENE_TOOL_NAMES | ROUTE_TOOL_NAMES
 
@@ -19,22 +25,24 @@ ALLOWED_TOOL_NAMES = SCENE_TOOL_NAMES | ROUTE_TOOL_NAMES
 MAX_TRANSPORT_RETRIES = 1
 MCP_CALL_TIMEOUT_SECONDS = 25
 RETRY_DELAY_SECONDS = 0.5
-TRANSIENT_EXCEPTION_NAMES = frozenset({
-    "BrokenResourceError",
-    "ClosedResourceError",
-    "EndOfStream",
-    "RemoteProtocolError",
-    "ReadError",
-    "ReadTimeout",
-    "ConnectError",
-    "ConnectTimeout",
-    "WriteError",
-    "WriteTimeout",
-    "PoolTimeout",
-    "TimeoutException",
-    "ConnectionResetError",
-    "ConnectionAbortedError",
-})
+TRANSIENT_EXCEPTION_NAMES = frozenset(
+    {
+        "BrokenResourceError",
+        "ClosedResourceError",
+        "EndOfStream",
+        "RemoteProtocolError",
+        "ReadError",
+        "ReadTimeout",
+        "ConnectError",
+        "ConnectTimeout",
+        "WriteError",
+        "WriteTimeout",
+        "PoolTimeout",
+        "TimeoutException",
+        "ConnectionResetError",
+        "ConnectionAbortedError",
+    }
+)
 
 
 class AmapMCPError(RuntimeError):
@@ -49,8 +57,10 @@ def _transient_transport_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, ExceptionGroup):
         children = [child for child in exc.exceptions if isinstance(child, Exception)]
-        return bool(children) and len(children) == len(exc.exceptions) and all(
-            _transient_transport_error(child) for child in children
+        return (
+            bool(children)
+            and len(children) == len(exc.exceptions)
+            and all(_transient_transport_error(child) for child in children)
         )
     return False
 
@@ -68,7 +78,12 @@ def protect_amap_tools(
     保护层保留工具名称、描述和输入 schema。每一次重试会重新调用原工具，
     由适配器为此次调用创建新 MCP 会话。
     """
-    if max_concurrency < 1 or timeout_seconds <= 0 or max_retries < 0 or retry_delay_seconds < 0:
+    if (
+        max_concurrency < 1
+        or timeout_seconds <= 0
+        or max_retries < 0
+        or retry_delay_seconds < 0
+    ):
         raise ValueError("MCP 调用限制参数无效")
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -76,14 +91,39 @@ def protect_amap_tools(
         async def guarded_call(**kwargs):
             async with semaphore:
                 for attempt in range(max_retries + 1):
+                    context = CURRENT_RUN.get()
+                    if context is not None:
+                        category = (
+                            "search_attempts"
+                            if tool.name in {"maps_text_search", "maps_around_search"}
+                            else "detail_attempts"
+                            if tool.name == "maps_search_detail"
+                            else None
+                        )
+                        if context.metrics[
+                            "map_attempts"
+                        ] >= context.limits.map_attempts or (
+                            category
+                            and context.metrics[category]
+                            >= getattr(context.limits, category)
+                        ):
+                            context.metrics["budget_rejections"] += 1
+                            return safe_error("map_budget_exceeded")
+                        context.metrics["map_attempts"] += 1
+                        if category:
+                            context.metrics[category] += 1
+                        if attempt:
+                            context.metrics["map_retries"] += 1
                     try:
                         result = await asyncio.wait_for(
-                            tool.ainvoke({
-                                "type": "tool_call",
-                                "id": uuid.uuid4().hex,
-                                "name": tool.name,
-                                "args": kwargs,
-                            }),
+                            tool.ainvoke(
+                                {
+                                    "type": "tool_call",
+                                    "id": uuid.uuid4().hex,
+                                    "name": tool.name,
+                                    "args": kwargs,
+                                }
+                            ),
                             timeout=timeout_seconds,
                         )
                         # A ToolCall retains the adapter's error status and structured
@@ -92,19 +132,26 @@ def protect_amap_tools(
                             if result.status == "error":
                                 raise ValueError("MCP provider rejected the request")
                             artifact = result.artifact
-                            if isinstance(artifact, dict) and "structured_content" in artifact:
+                            if (
+                                isinstance(artifact, dict)
+                                and "structured_content" in artifact
+                            ):
                                 return artifact["structured_content"]
                             return result.content
                         return result
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - provider errors may contain credentials
                         transient = _transient_transport_error(exc)
                         if transient and attempt < max_retries:
                             await asyncio.sleep(retry_delay_seconds * (attempt + 1))
                             continue
+                        if context is not None:
+                            context.metrics["map_failures"] += 1
                         return {
                             "status": "error",
                             "source": "amap_mcp",
-                            "error_code": "transport_unavailable" if transient else "tool_execution_failed",
+                            "error_code": "transport_unavailable"
+                            if transient
+                            else "tool_execution_failed",
                             "retryable": transient,
                             "message": (
                                 "高德 MCP 连接暂时中断，重试后仍未成功。"
@@ -157,12 +204,14 @@ async def load_amap_tools(api_key: str) -> tuple[list[BaseTool], list[BaseTool]]
             client.get_tools(server_name="amap"),
             timeout=MCP_CALL_TIMEOUT_SECONDS,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - never propagate credential-bearing discovery errors
         # HTTP URL 可能包含 Key，所以绝不传播原始异常的文本或堆栈。
-        raise AmapMCPError("连接高德 MCP 失败；请检查网络、Key、额度及服务状态") from None
+        raise AmapMCPError(
+            "连接高德 MCP 失败；请检查网络、Key、额度及服务状态"
+        ) from None
     scene, route = select_amap_tools(all_tools)
     # 共享一个 semaphore：路线和地点检索也不能彼此并发挤占 MCP 连接。
-    protected = protect_amap_tools(scene + route)
+    protected = govern_amap_tools(protect_amap_tools(scene + route), api_key)
     return (
         [tool for tool in protected if tool.name in SCENE_TOOL_NAMES],
         [tool for tool in protected if tool.name in ROUTE_TOOL_NAMES],

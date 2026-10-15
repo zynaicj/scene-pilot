@@ -1,5 +1,7 @@
 """统一创建 Qwen 模型。"""
+
 from langchain_openai import ChatOpenAI
+
 from scene_pilot.core.config import Settings
 
 
@@ -12,5 +14,7 @@ def create_qwen_model(settings: Settings) -> ChatOpenAI:
         base_url=settings.qwen_base_url,
         temperature=0,
         timeout=90,
-        max_retries=2
+        max_retries=0,
+        max_tokens=1600,
+        stream_usage=True,
     )

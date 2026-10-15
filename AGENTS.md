@@ -29,6 +29,6 @@ uv run scene-pilot
 
 ## 当前版本和后续
 
-V0.3：摄影需求、文字风格 Agent、高德 MCP 选景与路线、实拍核验关键词和流式追踪。后续依次推进天气 MCP + 太阳位置、本地硬约束校验、FastAPI / SSE / SQLite、多模态、前端。
+V0.3.1：保留 V0.3 摄影需求、Style/Scene/Route Agent、高德 MCP、人工实拍关键词；新增按次运行的缓存/去重/预算、来源记录、结构化推荐与安全停止。生产通过 `StreamObserver.arun` 运行，不能将 graph 自由文本直接作为事实输出。验收说明见 `docs/V0.3.1.md`。后续依次推进天气 MCP + 太阳位置、本地业务硬约束校验、FastAPI / SSE / SQLite、多模态、前端。
 
 历史上出现过 Qwen 免费额度 403 和模型服务 500。开发时不要反复消耗配额，先跑离线单测，再少量做端到端验证。

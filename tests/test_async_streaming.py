@@ -1,8 +1,10 @@
 """异步流式统计不访问任何外部网络。"""
+
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+
 from scene_pilot.observability.streaming import StreamObserver
 
 
@@ -13,17 +15,28 @@ class FakeAsyncAgent:
         yield {
             "type": "updates",
             "ns": (),
-            "data": {"model": {"messages": [SimpleNamespace(
-                type="ai", id="ai-final", content="摄影场景建议", tool_calls=[],
-                usage_metadata={"input_tokens": 13, "output_tokens": 7},
-            )]}},
+            "data": {
+                "model": {
+                    "messages": [
+                        SimpleNamespace(
+                            type="ai",
+                            id="ai-final",
+                            content="摄影场景建议",
+                            tool_calls=[],
+                            usage_metadata={"input_tokens": 13, "output_tokens": 7},
+                        )
+                    ]
+                }
+            },
         }
 
 
 class AsyncStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_stream(self):
         with tempfile.TemporaryDirectory() as tmp:
-            summary = await StreamObserver(Path(tmp), emit=lambda _: None).arun(FakeAsyncAgent(), "私密拍摄需求")
+            summary = await StreamObserver(
+                Path(tmp), emit=lambda _: None, require_evidence=False
+            ).arun(FakeAsyncAgent(), "私密拍摄需求")
             self.assertEqual(summary.final_text, "摄影场景建议")
             self.assertEqual(summary.model_calls, 1)
             self.assertEqual(summary.input_tokens, 13)
