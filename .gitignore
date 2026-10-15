@@ -23,4 +23,4 @@ htmlcov/
 # Local databases
 *.db
 *.sqlite
-*.sqlite3s
+*.sqlite3

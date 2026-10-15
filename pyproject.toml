@@ -1,7 +1,7 @@
 [project]
 name = "group-pilot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-agent group outing planner powered by Deep Agents and Qwen"
 authors = [
     { name = "zynaicj", email = "1471492469@qq.com" }
 ]
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-group-pilot = "group_pilot:main"
+group-pilot = "group_pilot.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]

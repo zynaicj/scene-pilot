@@ -1,110 +1,23 @@
-
-import os
-
-from dotenv import load_dotenv
+"""GroupPilot Deep Agents 主规划智能体。"""
 from deepagents import create_deep_agent
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
 from langchain.agents.middleware import TodoListMiddleware
+from group_pilot.agents.subagents import build_subagents
+from group_pilot.core.config import get_settings
+from group_pilot.core.llm import create_qwen_model
+from group_pilot.tools.budget_tools import calculate_group_budget
 
 
-load_dotenv()
+SUPERVISOR_PROMPT = """你是 GroupPilot 的主规划 Agent，面向高校课题组与多人团队出行。
+1. 识别出行日期、城市、准确出发地、人数、预算和偏好；缺少核心信息时先询问，不得自行指定校区或日期。
+2. 对复杂任务使用 write_todos。先委派 destination-agent 检索真实候选目的地，再将候选地坐标、原始出发地传给 route-agent。子 Agent 不共享完整主对话，所以委派内容必须包含所有必要参数。
+3. 如果用户提供人数与人均预算，可调用 calculate_group_budget；该结果仅代表预算上限，不是实际报价。
+4. 汇总来源可信的地点名称、坐标、距离和路线时间；报告无数据、工具失败及需人工确认的部分。
+5. 当前仅提供地点与驾车路线调研，不具备真实票价、团队交通报价、天气核查、预订或完整硬约束验证；不得宣称方案预算合规或可直接执行。
+6. 不要操作本地文件、运行 shell 或使用 general-purpose 子 Agent。使用简洁中文回复。
+"""
 
 
-# ========== 1. 定义工具 ==========
-
-@tool
-def calculate_group_budget(member_count: int,budget_per_person: float,) -> dict:
-    """计算团队总预算。
-
-    Args:
-        member_count: 参加活动的人数
-        budget_per_person: 每个人的预算，单位为元
-    """
-    if member_count <= 0 or budget_per_person < 0:
-        return {"status": "error", "message": "预算参数不合法"}
-
-    total = member_count * budget_per_person
-
-    return {
-        "status": "success",
-        "member_count": member_count,
-        "budget_per_person": budget_per_person,
-        "total_budget": round(total, 2),
-        "currency": "CNY",
-    }
-
-
-# ========== 2. 初始化 Qwen ==========
-
-model = ChatOpenAI(
-    model=os.environ["QWEN_MODEL"],
-    api_key=os.environ["DASHSCOPE_API_KEY"],
-    base_url=os.environ["QWEN_BASE_URL"],
-    temperature=0,
-)
-
-
-# ========== 3. 创建 Deep Agent ==========
-
-agent = create_deep_agent(
-    model=model,
-    tools=[calculate_group_budget],
-    middleware=[TodoListMiddleware()],
-    system_prompt="""
-你是 GroupPilot 团体出行规划平台的主 Agent。
-
-你的职责：
-1. 理解用户提出的多人出行需求。
-2. 对复杂任务使用 write_todos 制定任务清单。
-3. 使用工具完成确定性计算。
-4. 明确区分已知信息和待查询信息。
-5. 不得虚构地图路线、实时价格和天气数据。
-
-当前为开发测试阶段：
-只需要计算预算并拆解出行规划任务，
-不需要调用真实地图或生成最终旅游方案。
-""",
-)
-
-
-# ========== 4. 测试 Agent ==========
-
-def main():
-    user_request = """
-    我们是杭州的一所高校课题组，
-    计划组织一次周末团建。
-
-    一共有12个人，每人预算250元。
-
-    请完成以下任务：
-    1. 调用预算工具计算总预算。
-    2. 使用 write_todos 拆解后续规划任务。
-    3. 告诉我规划需要哪些信息。
-    """
-
-    result = agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": user_request}
-            ]
-        },
-        config={"recursion_limit": 30},
-    )
-
-    print("\n========== Agent 最终回复 ==========")
-    print(result["messages"][-1].content)
-
-    print("\n========== 工具调用记录 ==========")
-
-    for message in result["messages"]:
-        tool_calls = getattr(message, "tool_calls", [])
-
-        for call in tool_calls:
-            print(f"工具名称: {call['name']}")
-            print(f"调用参数: {call['args']}")
-            print("-" * 40)
-
-
-if __name__ == "__main__":
-    main()
+def build_group_pilot_agent():
+    settings = get_settings()
+    model = create_qwen_model(settings)
+    return create_deep_agent(model=model, tools=[calculate_group_budget], subagents=build_subagents(model), middleware=[TodoListMiddleware()], system_prompt=SUPERVISOR_PROMPT)
