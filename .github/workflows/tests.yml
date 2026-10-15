@@ -15,5 +15,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Install project dependencies
         run: uv sync
+      - name: Export generated lock temporarily
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          contents = Path("uv.lock").read_text(encoding="utf-8")
+          for i in range(0, len(contents), 1000):
+              print("SCENE_LOCK_FRAGMENT:" + json.dumps(contents[i:i+1000], ensure_ascii=True))
+          PY
       - name: Run offline unit tests
         run: uv run python -m unittest discover -s tests -v
