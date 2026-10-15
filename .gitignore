@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# PyCharm
+.idea/
+
+# Logs
+*.log
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3s
