@@ -20,4 +20,10 @@ SUPERVISOR_PROMPT = """你是 GroupPilot 的主规划 Agent，面向高校课题
 def build_group_pilot_agent():
     settings = get_settings()
     model = create_qwen_model(settings)
-    return create_deep_agent(model=model, tools=[calculate_group_budget], subagents=build_subagents(model), middleware=[TodoListMiddleware()], system_prompt=SUPERVISOR_PROMPT)
+    return create_deep_agent(
+        model=model,
+        tools=[calculate_group_budget],
+        subagents=build_subagents(model),
+        middleware=[TodoListMiddleware()],
+        system_prompt=SUPERVISOR_PROMPT
+    )
