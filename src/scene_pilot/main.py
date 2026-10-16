@@ -13,7 +13,7 @@ async def run_cli() -> None:
         print("请在项目根目录 .env 中配置 DASHSCOPE_API_KEY 和 AMAP_WEB_KEY")
         return
 
-    print("ScenePilot V0.3.1（人像约拍选景）。正在连接高德 MCP，请稍候……")
+    print("ScenePilot V0.4.0（人像约拍选景）。正在连接高德 MCP，请稍候……")
     try:
         agent = await build_scene_pilot_agent()
     except Exception as exc:  # noqa: BLE001 - CLI privacy boundary
@@ -61,7 +61,7 @@ async def run_cli() -> None:
             f"缺失用量统计的模型响应：{summary.metrics.get('usage_missing', 0)}"
         )
         print(
-            "说明：未接入实拍图核验、精准天气或太阳位置计算；地图调用量受高德账号额度约束。"
+            "说明：天气为区域逐日预报，太阳时段为本地天文估算，均不等于现场核验；高德调用受账号额度约束。"
         )
 
 

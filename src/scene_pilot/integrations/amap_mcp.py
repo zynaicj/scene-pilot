@@ -19,7 +19,8 @@ SCENE_TOOL_NAMES = frozenset(
     {"maps_text_search", "maps_around_search", "maps_search_detail"}
 )
 ROUTE_TOOL_NAMES = frozenset({"maps_geo", "maps_direction_driving"})
-ALLOWED_TOOL_NAMES = SCENE_TOOL_NAMES | ROUTE_TOOL_NAMES
+WEATHER_TOOL_NAMES = frozenset({"maps_weather"})
+ALLOWED_TOOL_NAMES = SCENE_TOOL_NAMES | ROUTE_TOOL_NAMES | WEATHER_TOOL_NAMES
 
 # 高德是只读地图服务：短暂断线后重试至多一次，且不会重试服务商明确的业务错误。
 MAX_TRANSPORT_RETRIES = 1
@@ -98,6 +99,8 @@ def protect_amap_tools(
                             if tool.name in {"maps_text_search", "maps_around_search"}
                             else "detail_attempts"
                             if tool.name == "maps_search_detail"
+                            else "weather_attempts"
+                            if tool.name == "maps_weather"
                             else None
                         )
                         if context.metrics[
@@ -180,13 +183,21 @@ def build_amap_mcp_client(api_key: str) -> MultiServerMCPClient:
         raise AmapMCPError("缺少 AMAP_WEB_KEY，请在本地 .env 中配置高德 Web 服务 Key")
     url = f"https://mcp.amap.com/mcp?key={quote(api_key.strip(), safe='')}"
     return MultiServerMCPClient(
-        {"amap": {"transport": "http", "url": url}},
+        {
+            "amap":
+                {
+                    "transport": "http",
+                    "url": url
+                }
+        },
         handle_tool_errors=False,
     )
 
 
-def select_amap_tools(tools: list[BaseTool]) -> tuple[list[BaseTool], list[BaseTool]]:
-    """只允许地点和路线相关工具；必需工具缺失时停止启动。"""
+def select_amap_tools(
+    tools: list[BaseTool],
+) -> tuple[list[BaseTool], list[BaseTool], list[BaseTool]]:
+    """按职责选择工具；天气可选，缺失时仍能进行地点检索。"""
     names = {tool.name for tool in tools}
     if "maps_text_search" not in names:
         raise AmapMCPError("高德 MCP 缺少 maps_text_search，无法进行真实地点检索")
@@ -194,10 +205,13 @@ def select_amap_tools(tools: list[BaseTool]) -> tuple[list[BaseTool], list[BaseT
         raise AmapMCPError("高德 MCP 缺少 maps_direction_driving，无法进行驾车路线查询")
     scene = [tool for tool in tools if tool.name in SCENE_TOOL_NAMES]
     route = [tool for tool in tools if tool.name in ROUTE_TOOL_NAMES]
-    return scene, route
+    weather = [tool for tool in tools if tool.name in WEATHER_TOOL_NAMES]
+    return scene, route, weather
 
 
-async def load_amap_tools(api_key: str) -> tuple[list[BaseTool], list[BaseTool]]:
+async def load_amap_tools(
+    api_key: str,
+) -> tuple[list[BaseTool], list[BaseTool], list[BaseTool]]:
     client = build_amap_mcp_client(api_key)
     try:
         all_tools = await asyncio.wait_for(
@@ -209,10 +223,11 @@ async def load_amap_tools(api_key: str) -> tuple[list[BaseTool], list[BaseTool]]
         raise AmapMCPError(
             "连接高德 MCP 失败；请检查网络、Key、额度及服务状态"
         ) from None
-    scene, route = select_amap_tools(all_tools)
+    scene, route, weather = select_amap_tools(all_tools)
     # 共享一个 semaphore：路线和地点检索也不能彼此并发挤占 MCP 连接。
-    protected = govern_amap_tools(protect_amap_tools(scene + route), api_key)
+    protected = govern_amap_tools(protect_amap_tools(scene + route + weather), api_key)
     return (
         [tool for tool in protected if tool.name in SCENE_TOOL_NAMES],
         [tool for tool in protected if tool.name in ROUTE_TOOL_NAMES],
+        [tool for tool in protected if tool.name in WEATHER_TOOL_NAMES],
     )

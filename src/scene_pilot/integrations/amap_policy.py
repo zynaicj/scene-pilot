@@ -54,7 +54,11 @@ def govern_amap_tools(tools, api_key: str):
                         code = "invalid_tool_response"
                     return safe_error(code)
                 result = compact_result(
-                    raw, tool.name, context, (api_key, quote(api_key, safe=""))
+                    raw,
+                    tool.name,
+                    context,
+                    (api_key, quote(api_key, safe="")),
+                    query=kwargs,
                 )
                 if tool.name == "maps_direction_driving":
                     for item in result["paths"]:

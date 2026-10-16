@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from scene_pilot.core.photography import make_verification_queries
+from scene_pilot.core.environment import ShootingConditions, render_conditions
 
 
 class StrictModel(BaseModel):
@@ -21,6 +22,13 @@ class MapEvidence(StrictModel):
     name: str = Field(min_length=1, max_length=200)
     address: str | None = Field(default=None, max_length=500)
     location: str | None = None
+    city: str | None = Field(default=None, max_length=80)
+    adcode: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
+    query_city: str | None = Field(
+        default=None,
+        max_length=80,
+        description="地点搜索的城市参数，不代表服务返回或已确认的 POI 行政归属",
+    )
 
     @model_validator(mode="after")
     def identity_and_coordinates(self):
@@ -93,6 +101,7 @@ class CandidateRecommendation(StrictModel):
     unknown: UnknownVenueInfo = Field(default_factory=UnknownVenueInfo)
     verification_queries: list[str]
     driving_route: DrivingRouteEvidence | None = None
+    conditions: ShootingConditions | None = None
 
 
 class PhotographyRecommendation(StrictModel):
@@ -103,7 +112,9 @@ class PhotographyRecommendation(StrictModel):
     status: Literal["completed", "partial", "no_verified_candidates"]
 
 
-def assemble_recommendation(request, statements, drafts, evidence, routes=None):
+def assemble_recommendation(
+    request, statements, drafts, evidence, routes=None, conditions=None
+):
     """Check exact user quotations and resolve facts against this run's registry."""
     if any(item.quote not in request for item in statements):
         raise ValueError("User statement is not an exact quote")
@@ -132,6 +143,7 @@ def assemble_recommendation(request, statements, drafts, evidence, routes=None):
                 advice=draft.advice,
                 verification_queries=make_verification_queries(facts.name, "人像"),
                 driving_route=route,
+                conditions=(conditions or {}).get(facts.evidence_id),
             )
         )
     return PhotographyRecommendation(
@@ -170,5 +182,9 @@ def render_recommendation(plan: PhotographyRecommendation) -> str:
         lines.append(
             "待人工确认：门票、开放时间、评分、商业拍摄许可、机位、植被、人流和视觉效果。"
         )
+        if item.conditions:
+            lines.extend(render_conditions(item.conditions))
+        else:
+            lines.append("天气与太阳时段：尚未取得本次候选地点的条件报告。")
         lines.append("小红书/抖音人工搜索：" + "；".join(item.verification_queries))
     return "\n".join(lines)

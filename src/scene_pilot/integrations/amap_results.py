@@ -65,7 +65,9 @@ def _text(value, limit: int, secrets: tuple[str, ...]):
         raise InvalidMapResult()
     if any(secret and secret in value for secret in secrets):
         raise InvalidMapResult()
-    if re.search(r"https?://|api.?key|authorization|bearer\s|key=", value, re.IGNORECASE):
+    if re.search(
+        r"https?://|api.?key|authorization|bearer\s|key=", value, re.IGNORECASE
+    ):
         raise InvalidMapResult()
     return value.strip() or None
 
@@ -82,7 +84,7 @@ def _number(value):
     return number
 
 
-def compact_result(raw, tool_name, context, secrets=()):
+def compact_result(raw, tool_name, context, secrets=(), query=None):
     data = decode_result(raw)
     if tool_name in {"maps_text_search", "maps_around_search", "maps_search_detail"}:
         pois = data.get("pois")
@@ -101,7 +103,22 @@ def compact_result(raw, tool_name, context, secrets=()):
                     "name": _text(poi.get("name"), 200, secrets),
                     "address": _text(poi.get("address"), 500, secrets),
                     "location": _text(poi.get("location"), 80, secrets),
+                    "city": _text(poi.get("cityname"), 80, secrets),
+                    "adcode": _text(poi.get("adcode"), 6, secrets),
                 }
+                fields["query_city"] = (
+                    _text((query or {}).get("city"), 80, secrets)
+                    if tool_name in {"maps_text_search", "maps_around_search"}
+                    else None
+                )
+                if tool_name == "maps_search_detail" and fields["poi_id"]:
+                    query_cities = {
+                        entry.query_city
+                        for entry in context.evidence.values()
+                        if entry.poi_id == fields["poi_id"] and entry.query_city
+                    }
+                    if len(query_cities) == 1:
+                        fields["query_city"] = next(iter(query_cities))
                 candidate = MapEvidence(
                     evidence_id="poi_" + uuid.uuid4().hex[:16],
                     tool=tool_name,
@@ -199,4 +216,8 @@ def compact_result(raw, tool_name, context, secrets=()):
             "omitted_count": max(0, len(paths) - 3),
             "note": "查询时的驾车估算，不保证拍摄当天路况。",
         }
+    if tool_name == "maps_weather":
+        from scene_pilot.integrations.weather_results import compact_weather
+
+        return compact_weather(data, context, secrets, query)
     raise InvalidMapResult()

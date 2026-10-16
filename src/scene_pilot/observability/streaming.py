@@ -132,7 +132,11 @@ class StreamObserver:
                     if len(selected) == 3:
                         break
                 plan = assemble_recommendation(
-                    context.request, [], selected, context.evidence
+                    context.request,
+                    [],
+                    selected,
+                    context.evidence,
+                    conditions=context.conditions,
                 )
                 if plan.candidates:
                     plan = plan.model_copy(update={"status": "partial"})
