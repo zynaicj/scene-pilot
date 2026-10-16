@@ -4,7 +4,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from scene_pilot.agents.budgets import budget_middleware
+from scene_pilot.agents.budgets import DomainToolsMiddleware, budget_middleware
 
 STYLE_PROMPT = """你是人像约拍摄影风格分析专员。
 仅从摄影师提供的文字需求中提取服饰颜色、妆造和风格；未提供的材质、发型、妆容细节保持未知。
@@ -15,7 +15,8 @@ STYLE_PROMPT = """你是人像约拍摄影风格分析专员。
 
 SCENE_PROMPT = """你是摄影场景调研专员。
 通过高德 MCP 的 maps_text_search 或 maps_around_search 检索用户指定城市里的真实拍摄候选地点；文字搜索时明确传 city 参数，不能只把城市混在 keywords 中。可用 maps_search_detail 查看地点详情。优先进行 1-2 次有针对性的搜索，不为了凑数连续大量调用工具。
-最多推荐 3 个地点，必须原样传回 evidence_id、名称、地址和坐标；不创造缺失信息。已有足够地点时不追加搜索；仅当决策缺少关键基本信息才查详情，同一 POI 不重复查询。工具有运行额度，额度耗尽后停止查询。
+最多推荐 3 个地点，必须原样传回 evidence_id、名称、地址和坐标；不创造缺失信息。得到三个不重复候选就停止新增搜索，直接汇报；文字与周边搜索共用两次尝试额度，不能换工具绕过。两次尝试后不足三个也汇报已有结果。
+坐标缺失不代表候选无效，也不是继续搜索其他地点的理由。确需补全坐标时只对已有 POI ID 使用详情工具，同一 POI 不重复查；仍缺失就标未知并立即交回主管，不能用地名猜坐标。
 高德 POI 名称不能证实某个机位的视觉氛围、季节植被、人流、收费和拍摄许可；以上内容都标为待实地核实。
 若用户尚未提供城市，先向主管说明缺少城市，不能擅自查其他城市。查询失败要明确报告。若工具返回 status=error，先利用其他已取得的真实 POI；没有成功结果时明确说明不能核验地点，不得编造。
 汇报不超过 600 中文字，完整保留 evidence_id，不抄录冗长工具原文。"""
@@ -58,6 +59,11 @@ def build_subagents(
     ]
     # CompiledSubAgent is Deep Agents' supported integration point. Specialist
     # graphs do not inherit filesystem, general-purpose or delegation tools.
+    scene_progress = DomainToolsMiddleware(
+        allowed={tool.name for tool in scene_tools},
+        prompt=SCENE_PROMPT,
+        phase="scene",
+    )
     return [
         {
             "name": spec["name"],
@@ -66,10 +72,13 @@ def build_subagents(
                 model=model,
                 tools=spec["tools"],
                 system_prompt=spec["system_prompt"],
-                middleware=budget_middleware(
-                    model_calls=2 if spec["name"] == "style-agent" else 4,
-                    tool_calls=6,
-                ),
+                middleware=[
+                    *budget_middleware(
+                        model_calls=2 if spec["name"] == "style-agent" else 4,
+                        tool_calls=6,
+                    ),
+                    *([scene_progress] if spec["name"] == "scene-agent" else []),
+                ],
             ),
         }
         for spec in specs

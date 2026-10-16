@@ -105,10 +105,10 @@ class AgentExecutionTests(unittest.IsolatedAsyncioTestCase):
                 graph, "杭州日系人像，淡妆"
             )
             self.assertEqual(result.status, "completed")
-            self.assertEqual(result.metrics["model_attempts"], 5)
+            self.assertEqual(result.metrics["model_attempts"], 4)
             self.assertEqual(result.metrics["map_attempts"], 1)
-            self.assertEqual(result.model_calls, 5)
-            self.assertEqual(result.input_tokens, 500)
+            self.assertEqual(result.model_calls, 4)
+            self.assertEqual(result.input_tokens, 400)
             self.assertEqual(len(result.recommendation["candidates"]), 1)
             self.assertIn("测试公园", result.final_text)
             self.assertNotIn("已核实免费", result.final_text)
