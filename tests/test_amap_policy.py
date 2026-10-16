@@ -16,6 +16,7 @@ POI = {"id": "B001", "name": "测试公园", "address": "测试路", "location":
 
 
 class Arguments(BaseModel):
+    city: str = ""
     keywords: str = ""
     id: str = ""
     origin: str = ""

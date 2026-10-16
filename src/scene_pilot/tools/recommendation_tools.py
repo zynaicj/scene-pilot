@@ -24,6 +24,7 @@ def finalize_recommendation(
             candidates,
             context.evidence,
             context.routes,
+            context.conditions,
         )
     except ValueError:
         return {

@@ -15,6 +15,7 @@ class ExecutionLimits(BaseModel):
     map_attempts: int = Field(default=8, ge=1, le=50)
     search_attempts: int = Field(default=2, ge=1, le=10)
     detail_attempts: int = Field(default=3, ge=0, le=10)
+    weather_attempts: int = Field(default=2, ge=0, le=5)
     model_calls: int = Field(default=12, ge=1, le=50)
     observed_tokens: int = Field(default=40000, ge=1)
     recursion_limit: int = Field(default=40, ge=2, le=200)
@@ -38,6 +39,8 @@ class RunContext:
             "map_attempts": 0,
             "search_attempts": 0,
             "detail_attempts": 0,
+            "weather_attempts": 0,
+            "solar_calculations": 0,
             "cache_hits": 0,
             "map_retries": 0,
             "map_failures": 0,
@@ -53,6 +56,9 @@ class RunContext:
     cache: dict = field(default_factory=dict, repr=False)
     evidence: dict = field(default_factory=dict, repr=False)
     routes: dict = field(default_factory=dict, repr=False)
+    weather: dict = field(default_factory=dict, repr=False)
+    conditions: dict = field(default_factory=dict, repr=False)
+    brief: Any = field(default=None, repr=False)
     recommendation: Any = field(default=None, repr=False)
     lock: Lock = field(default_factory=Lock, repr=False)
 

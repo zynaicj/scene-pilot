@@ -46,7 +46,8 @@ class AmapMCPTests(unittest.TestCase):
             SimpleNamespace(name="maps_weather"),
             SimpleNamespace(name="execute"),
         ]
-        scene, route = select_amap_tools(tools)
+        scene, route, weather = select_amap_tools(tools)
+        self.assertEqual([t.name for t in weather], ["maps_weather"])
         self.assertEqual(
             [t.name for t in scene], ["maps_text_search", "maps_search_detail"]
         )
@@ -127,7 +128,8 @@ class AmapMCPAsyncTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "scene_pilot.integrations.amap_mcp.build_amap_mcp_client", return_value=fake
         ):
-            scene, route = await load_amap_tools("test-key")
+            scene, route, weather = await load_amap_tools("test-key")
+            self.assertEqual(weather, [])
             self.assertEqual(len(scene), 1)
             self.assertEqual(len(route), 1)
             with execution_scope("杭州"):

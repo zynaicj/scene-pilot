@@ -29,6 +29,6 @@ uv run scene-pilot
 
 ## 当前版本和后续
 
-V0.3.1：保留 V0.3 摄影需求、Style/Scene/Route Agent、高德 MCP、人工实拍关键词；新增按次运行的缓存/去重/预算、来源记录、结构化推荐与安全停止。生产通过 `StreamObserver.arun` 运行，不能将 graph 自由文本直接作为事实输出。验收说明见 `docs/V0.3.1.md`。后续依次推进天气 MCP + 太阳位置、本地业务硬约束校验、FastAPI / SSE / SQLite、多模态、前端。
+V0.4.0：在 V0.3.1 的缓存/预算/证据输出上增加可选高德天气 MCP 与本地 Astral 太阳时段。需求保存在本次 RunContext；日期仅接受用户原文中的 YYYY-MM-DD，不将其他模型提取字段视为已确认硬约束。天气缺失发布时间标为 reference，不用查询时间代替发布时间。天气最多 2 次尝试，计入高德总预算 8 次。生产通过 `StreamObserver.arun` 运行，不能将 graph 自由文本直接作为事实输出。验收说明见 `docs/V0.4.0.md`。后续依次推进需求确认与本地业务硬约束校验、FastAPI / SSE / SQLite、多模态、前端。
 
 历史上出现过 Qwen 免费额度 403 和模型服务 500。开发时不要反复消耗配额，先跑离线单测，再少量做端到端验证。
