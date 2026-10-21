@@ -24,6 +24,7 @@ from scene_pilot.core.recommendation import (
     assemble_recommendation,
     render_recommendation,
 )
+from scene_pilot.core.confirmation import ConfirmedBrief, resolve_departure
 
 SAFE_STOPS = (
     ExecutionBudgetExceeded,
@@ -136,7 +137,10 @@ class StreamObserver:
                     [],
                     selected,
                     context.evidence,
+                    routes=context.routes,
                     conditions=context.conditions,
+                    confirmed_brief=context.confirmed_brief,
+                    departure=context.departure,
                 )
                 if plan.candidates:
                     plan = plan.model_copy(update={"status": "partial"})
@@ -292,20 +296,27 @@ class StreamObserver:
                 self._handle_message(message, namespace)
 
     def run(
-        self, agent, request: str, recursion_limit: int | None = None
+        self,
+        agent,
+        request: str,
+        recursion_limit: int | None = None,
+        *,
+        confirmed_brief: ConfirmedBrief | None = None,
     ) -> RunSummary:
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
         self.started = time.perf_counter()
         with (
-            execution_scope(request, self.limits) as context,
+            execution_scope(
+                request, self.limits, confirmed_brief=confirmed_brief
+            ) as context,
             self.trace_path.open("w", encoding="utf-8") as trace_file,
         ):
             self._trace_file = trace_file
+            self._include_preparation(confirmed_brief)
             self._record("run_started")
             try:
-                if len(request) > self.limits.max_input_chars:
-                    raise ExecutionBudgetExceeded("request_too_long")
+                self._check_input(context)
                 for part in agent.stream(
                     {"messages": [{"role": "user", "content": request}]},
                     config={
@@ -332,22 +343,38 @@ class StreamObserver:
         return self._summary()
 
     async def arun(
-        self, agent, request: str, recursion_limit: int | None = None
+        self,
+        agent,
+        request: str,
+        recursion_limit: int | None = None,
+        *,
+        confirmed_brief: ConfirmedBrief | None = None,
+        geocode_tool=None,
+        select_origin=None,
     ) -> RunSummary:
         """消费异步 LangGraph v2 流，供 MCP 异步工具使用。"""
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.emit(f"\n[ScenePilot] 正在规划，运行 ID：{self.run_id}")
         self.started = time.perf_counter()
         with (
-            execution_scope(request, self.limits) as context,
+            execution_scope(
+                request, self.limits, confirmed_brief=confirmed_brief
+            ) as context,
             self.trace_path.open("w", encoding="utf-8") as trace_file,
         ):
             self._trace_file = trace_file
+            self._include_preparation(confirmed_brief)
             self._record("run_started")
             try:
-                if len(request) > self.limits.max_input_chars:
-                    raise ExecutionBudgetExceeded("request_too_long")
-                async with asyncio.timeout(self.limits.timeout_seconds):
+                self._check_input(context)
+                waiting = await resolve_departure(context, geocode_tool, select_origin)
+                self.started += waiting
+                remaining = self.limits.timeout_seconds - (
+                    time.perf_counter() - self.started
+                )
+                if remaining <= 0:
+                    raise ExecutionBudgetExceeded("elapsed_time")
+                async with asyncio.timeout(remaining):
                     async for part in agent.astream(
                         {"messages": [{"role": "user", "content": request}]},
                         config={
@@ -374,3 +401,22 @@ class StreamObserver:
                 self._finish(context)
                 self._trace_file = None
         return self._summary()
+
+    def _include_preparation(self, confirmed):
+        if confirmed:
+            usage = confirmed.preparation_usage
+            self.model_calls += usage.model_attempts
+            self.input_tokens += usage.input_tokens
+            self.output_tokens += usage.output_tokens
+
+    def _check_input(self, context):
+        size = len(context.request)
+        if context.confirmed_brief:
+            size += len(context.confirmed_brief.brief.model_dump_json())
+        if size > self.limits.max_input_chars:
+            raise ExecutionBudgetExceeded("request_too_long")
+        # Extraction is charged to the same model/token budget before map work.
+        if context.metrics["model_attempts"] >= self.limits.model_calls:
+            raise ExecutionBudgetExceeded("model_calls")
+        if context.metrics["observed_tokens"] >= self.limits.observed_tokens:
+            raise ExecutionBudgetExceeded("observed_tokens")

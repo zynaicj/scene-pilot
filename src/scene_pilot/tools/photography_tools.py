@@ -11,6 +11,18 @@ def prepare_photography_brief(**kwargs) -> dict:
     brief = PhotographyBrief.model_validate(kwargs)
     context = CURRENT_RUN.get()
     if context is not None:
+        if context.confirmed_brief is not None:
+            if brief != context.confirmed_brief.brief:
+                return {
+                    "status": "error",
+                    "error_code": "confirmed_brief_immutable",
+                    "message": "只能使用用户已确认需求；修改条件须重新确认并开始新一轮。",
+                }
+            return {
+                "status": "success",
+                "brief": context.confirmed_brief.brief.model_dump(mode="json"),
+                "note": "用户已确认的需求快照；不等于地图或现场事实已核验。",
+            }
         if (
             brief.shooting_date
             and brief.shooting_date.isoformat() not in context.request

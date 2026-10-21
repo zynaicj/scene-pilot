@@ -11,14 +11,49 @@ from urllib.parse import quote
 from langchain_core.tools import StructuredTool
 
 from scene_pilot.core.execution import current_run
+from scene_pilot.core.confirmation import coordinates
 from scene_pilot.core.recommendation import DrivingRouteEvidence
 from scene_pilot.integrations.amap_results import compact_result, safe_error
+
+
+def _route_query_allowed(context, tool_name, kwargs):
+    """Reject mismatched route queries before spending upstream quota."""
+    if context.confirmed_brief is None:
+        # Legacy unconfirmed calls never qualify for hard-constraint checks.
+        return True
+    brief = context.confirmed_brief.brief
+    if tool_name == "maps_geo":
+        return (
+            brief.transport_mode == "驾车"
+            and bool(brief.departure)
+            and kwargs.get("address") == brief.departure
+            and kwargs.get("city") == brief.city
+        )
+    if tool_name != "maps_direction_driving":
+        return True
+    if brief.transport_mode != "驾车" or context.departure is None:
+        return False
+    try:
+        return (
+            context.departure.query_address == brief.departure
+            and context.departure.query_city == brief.city
+            and coordinates(kwargs["origin"]) == coordinates(context.departure.location)
+            and any(
+                item.location
+                and coordinates(item.location) == coordinates(kwargs["destination"])
+                for item in context.evidence.values()
+            )
+        )
+    except (ValueError, KeyError, AttributeError, TypeError):
+        return False
 
 
 def govern_amap_tools(tools, api_key: str):
     async def invoke(tool, kwargs):
         context = current_run()
         context.metrics["map_requests"] += 1
+        if not _route_query_allowed(context, tool.name, kwargs):
+            return safe_error("confirmed_route_required")
         key = (tool.name, json.dumps(kwargs, sort_keys=True, ensure_ascii=False))
         # Contexts are never shared between user requests; a single-flight lock
         # prevents concurrent duplicate cache misses from spending two calls.
@@ -75,6 +110,16 @@ def govern_amap_tools(tools, api_key: str):
                             retrieved_at=datetime.now(UTC),
                             query_origin=origin,
                             query_destination=destination,
+                            brief_confirmation_id=(
+                                context.confirmed_brief.confirmation_id
+                                if context.confirmed_brief
+                                else None
+                            ),
+                            origin_evidence_id=(
+                                context.departure.evidence_id
+                                if context.departure
+                                else None
+                            ),
                             **item,
                         )
                         context.routes[route.evidence_id] = route
