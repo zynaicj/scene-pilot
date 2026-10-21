@@ -20,6 +20,9 @@ from scene_pilot.integrations.amap_results import compact_result
 from test_agent_execution import ScriptedModel, call
 from test_amap_policy import wrapped_tool
 from test_environment import NOW, weather_payload, weather_tool
+from test_confirmation import confirmed
+from test_confirmed_routes import geocoder, first
+from scene_pilot.core.confirmation import PreparationUsage, confirm_brief
 
 
 class StepModel(ScriptedModel):
@@ -38,7 +41,9 @@ class StepModel(ScriptedModel):
 
 
 class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
-    async def run_planning(self, *, enough_on_first=True, with_routes=False):
+    async def run_planning(
+        self, *, enough_on_first=True, with_routes=False, confirmed_flow=False
+    ):
         searches = []
         weather_calls = []
 
@@ -57,7 +62,10 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
             }
 
         async def driving(**kwargs):
-            return {"paths": [{"distance": "1000", "duration": "600"}]}
+            duration = 600
+            if confirmed_flow:
+                duration = 2400 if kwargs["destination"] == "120.0,30" else 3300
+            return {"paths": [{"distance": "1000", "duration": duration}]}
 
         async def forecast(city):
             weather_calls.append(city)
@@ -106,7 +114,7 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
 
             names = [item.name for item in results]
             task_results = [item for item in results if item.name == "task"]
-            if "prepare_photography_brief" not in names:
+            if "prepare_photography_brief" not in names and not confirmed_flow:
                 brief = call(
                     "prepare_photography_brief",
                     {
@@ -161,7 +169,7 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
                 )
             if "finalize_recommendation" not in names:
                 drafts = [{"evidence_id": item["evidence_id"]} for item in pois]
-                if with_routes:
+                if with_routes and not confirmed_flow:
                     routes = json.loads(task_results[2].content)
                     for draft, route in zip(drafts, routes, strict=True):
                         draft["route_evidence_id"] = route["paths"][0][
@@ -189,8 +197,30 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
             patch("scene_pilot.tools.environment_tools.datetime") as clock,
         ):
             clock.now.return_value = NOW
+            request = "杭州日系 2026-10-17 从119,30出发"
+            options = {}
+            if confirmed_flow:
+                snapshot = confirmed(
+                    request, shooting_date="2026-10-17", max_budget_cny=300
+                )
+                snapshot = confirm_brief(
+                    request,
+                    snapshot.brief,
+                    accepted=True,
+                    preparation_usage=PreparationUsage(
+                        model_attempts=1, input_tokens=100, output_tokens=20
+                    ),
+                )
+                geo, _ = geocoder()
+                options = {
+                    "confirmed_brief": snapshot,
+                    "geocode_tool": geo,
+                    "select_origin": first,
+                }
             result = await StreamObserver(Path(directory), emit=lambda _: None).arun(
-                graph, "杭州日系 2026-10-17 从119,30出发"
+                graph,
+                request,
+                **options,
             )
             events = [
                 json.loads(line)
@@ -200,7 +230,10 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.recommendation["status"], "completed")
         self.assertEqual(ExecutionLimits().recursion_limit, 40)
         self.assertLessEqual(result.metrics["model_attempts"], 12)
-        self.assertEqual(model.supervisor_steps, [3, 9, 15, 21, 27, 33])
+        expected_steps = [3, 9, 15, 21, 27]
+        if with_routes or not confirmed_flow:
+            expected_steps.append(33)
+        self.assertEqual(model.supervisor_steps, expected_steps)
         self.assertEqual(
             sum(
                 e.get("tool") == "write_todos" and e["event"] == "tool_requested"
@@ -212,6 +245,29 @@ class WorkflowProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(searches), 1 if enough_on_first else 2)
         self.assertEqual(result.metrics["budget_rejections"], 0)
         return result
+
+    async def test_confirmed_flow_with_three_routes_weather_and_extraction_fits_budget(
+        self,
+    ):
+        result = await self.run_planning(with_routes=True, confirmed_flow=True)
+        self.assertEqual(result.metrics["model_attempts"], 12)
+        self.assertEqual(result.metrics["map_attempts"], 6)
+        self.assertEqual(result.input_tokens, 1200)
+        candidates = result.recommendation["candidates"]
+        self.assertEqual(
+            [item["travel_time"]["status"] for item in candidates],
+            ["meets", "not_met", "not_met"],
+        )
+        self.assertIn("信息不足，尚无可靠的完整费用证据", result.final_text)
+
+    async def test_confirmed_flow_missing_coordinates_still_finalizes(self):
+        result = await self.run_planning(confirmed_flow=True)
+        self.assertTrue(
+            all(
+                item["travel_time"]["status"] == "unknown"
+                for item in result.recommendation["candidates"]
+            )
+        )
 
     async def test_three_candidates_missing_coordinates_still_finalize(self):
         result = await self.run_planning()

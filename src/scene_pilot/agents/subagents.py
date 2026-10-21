@@ -78,6 +78,17 @@ def build_subagents(
                         tool_calls=6,
                     ),
                     *([scene_progress] if spec["name"] == "scene-agent" else []),
+                    *(
+                        [
+                            DomainToolsMiddleware(
+                                allowed={tool.name for tool in route_tools},
+                                prompt=ROUTE_PROMPT,
+                                phase="route",
+                            )
+                        ]
+                        if spec["name"] == "route-agent"
+                        else []
+                    ),
                 ],
             ),
         }

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pydantic import ValidationError
 
 from scene_pilot.core.recommendation import MapEvidence
+from scene_pilot.core.confirmation import DepartureEvidence
 
 
 class InvalidMapResult(ValueError):
@@ -177,14 +178,23 @@ def compact_result(raw, tool_name, context, secrets=(), query=None):
                 name="geocode",
                 location=location,
             )
-            locations.append(
-                {
-                    "location": location,
-                    "formatted_address": _text(
-                        item.get("formatted_address"), 500, secrets
-                    ),
-                }
-            )
+            projected = {
+                "location": location,
+                "formatted_address": _text(item.get("formatted_address"), 500, secrets),
+            }
+            address = _text((query or {}).get("address"), 120, secrets)
+            city = _text((query or {}).get("city"), 60, secrets)
+            if address and city:
+                evidence = DepartureEvidence(
+                    evidence_id="origin_" + uuid.uuid4().hex[:16],
+                    retrieved_at=datetime.now(UTC),
+                    query_address=address,
+                    query_city=city,
+                    **projected,
+                )
+                context.geocodes[evidence.evidence_id] = evidence
+                projected["evidence_id"] = evidence.evidence_id
+            locations.append(projected)
         return {
             "status": "success",
             "source": "amap_mcp",

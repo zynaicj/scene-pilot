@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from scene_pilot.core.confirmation import ConfirmedBrief
+
 
 class ExecutionLimits(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
@@ -58,6 +60,9 @@ class RunContext:
     routes: dict = field(default_factory=dict, repr=False)
     weather: dict = field(default_factory=dict, repr=False)
     conditions: dict = field(default_factory=dict, repr=False)
+    geocodes: dict = field(default_factory=dict, repr=False)
+    departure: Any = field(default=None, repr=False)
+    confirmed_brief: ConfirmedBrief | None = field(default=None, repr=False)
     brief: Any = field(default=None, repr=False)
     recommendation: Any = field(default=None, repr=False)
     lock: Lock = field(default_factory=Lock, repr=False)
@@ -82,8 +87,27 @@ def current_run() -> RunContext:
 
 
 @contextmanager
-def execution_scope(request: str, limits: ExecutionLimits | None = None):
+def execution_scope(
+    request: str,
+    limits: ExecutionLimits | None = None,
+    *,
+    confirmed_brief: ConfirmedBrief | None = None,
+):
     context = RunContext(request=request, limits=limits or ExecutionLimits())
+    if confirmed_brief is not None:
+        if (
+            not isinstance(confirmed_brief, ConfirmedBrief)
+            or confirmed_brief.request != request
+        ):
+            raise ValueError("confirmation_request_mismatch")
+        context.confirmed_brief = confirmed_brief
+        context.brief = confirmed_brief.brief
+        usage = confirmed_brief.preparation_usage
+        context.metrics.update(
+            model_attempts=usage.model_attempts,
+            observed_tokens=usage.input_tokens + usage.output_tokens,
+            usage_missing=usage.usage_missing,
+        )
     token = CURRENT_RUN.set(context)
     try:
         yield context
