@@ -18,7 +18,7 @@ async def run_cli() -> None:
         print("请在项目根目录 .env 中配置 DASHSCOPE_API_KEY 和 AMAP_WEB_KEY")
         return
 
-    print("ScenePilot V0.5.0（人像约拍选景）。先提取需求供你检查，确认后开始选景。")
+    print("ScenePilot V0.6.0（人像约拍选景）。先提取需求供你检查，确认后开始选景。")
     print("需求提取最多调用一次模型，计入本次 12 次模型额度；修改字段不调用模型。")
     try:
         model = create_qwen_model(settings)
