@@ -47,7 +47,7 @@ class OfflineRuntime:
             PreparationUsage(model_attempts=1, input_tokens=10, output_tokens=5),
         )
 
-    async def plan(self, request, confirmed, select_origin):
+    async def plan(self, request, confirmed, select_origin, *, on_progress=None):
         self.plan_calls += 1
         self.confirmations.append(confirmed)
         try:
@@ -127,7 +127,7 @@ class APITests(unittest.IsolatedAsyncioTestCase):
         return await self.wait_status(task["id"], "awaiting_origin")
 
     async def test_health_and_openapi_do_not_use_providers(self):
-        self.assertEqual((await self.client.get("/health")).json()["version"], "0.6.0")
+        self.assertEqual((await self.client.get("/health")).json()["version"], "0.7.0")
         schema = (await self.client.get("/openapi.json")).json()
         self.assertIn("/tasks/{task_id}/origin", schema["paths"])
         self.assertEqual(self.runtime.extract_calls, 0)

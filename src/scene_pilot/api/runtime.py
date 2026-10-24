@@ -49,9 +49,12 @@ class PlanningRuntime:
         geocode = next((tool for tool in routes if tool.name == "maps_geo"), None)
         return graph, geocode
 
-    async def plan(self, request, confirmed, select_origin):
+    async def plan(self, request, confirmed, select_origin, *, on_progress=None):
         observer = StreamObserver(
-            self.trace_dir, emit=lambda _: None, limits=self.limits
+            self.trace_dir,
+            emit=lambda _: None,
+            limits=self.limits,
+            on_progress=on_progress,
         )
         error_code = None
         try:

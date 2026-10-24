@@ -1,6 +1,6 @@
 [project]
 name = "scene-pilot"
-version = "0.6.0"
+version = "0.7.0"
 description = "ScenePilot: MCP-powered multi-agent portrait photography location planner"
 authors = [
     { name = "zynaicj", email = "1471492469@qq.com" }

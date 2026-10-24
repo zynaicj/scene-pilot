@@ -8,6 +8,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    computed_field,
     field_validator,
     model_validator,
 )
@@ -19,6 +20,8 @@ from scene_pilot.core.confirmation import (
 )
 from scene_pilot.core.photography import PhotographyBrief
 from scene_pilot.core.recommendation import PhotographyRecommendation
+from scene_pilot.core.progress import TaskProgress
+from scene_pilot.api.errors import error_message
 
 TaskStatus = Literal[
     "extracting",
@@ -105,6 +108,11 @@ class PlanningResult(Contract):
     metrics: dict[str, int | float] = Field(default_factory=dict)
     error_code: str | None = None
 
+    @computed_field
+    @property
+    def error_message(self) -> str | None:
+        return error_message(self.error_code)
+
 
 class TaskSummary(Contract):
     id: str
@@ -113,6 +121,13 @@ class TaskSummary(Contract):
     created_at: datetime
     updated_at: datetime
     error_code: str | None = None
+    progress: TaskProgress = Field(default_factory=TaskProgress)
+    settled: bool = True
+
+    @computed_field
+    @property
+    def error_message(self) -> str | None:
+        return error_message(self.error_code)
 
 
 class TaskDetail(TaskSummary):
@@ -129,9 +144,15 @@ class TaskDetail(TaskSummary):
 class TaskRecord(TaskDetail):
     usage: PreparationUsage = Field(default_factory=PreparationUsage)
     result: PlanningResult | None = None
+    event_sequence: int = 0
 
     def detail(self) -> TaskDetail:
-        return TaskDetail.model_validate(self.model_dump(exclude={"usage", "result"}))
+        return TaskDetail.model_validate(
+            self.model_dump(
+                exclude={"usage", "result", "event_sequence"},
+                exclude_computed_fields=True,
+            )
+        )
 
     def summary(self) -> TaskSummary:
         return TaskSummary.model_validate(
@@ -144,6 +165,43 @@ class ResultView(Contract):
     status: TaskStatus
     result: PlanningResult | None
     error_code: str | None
+    settled: bool = True
+
+    @computed_field
+    @property
+    def error_message(self) -> str | None:
+        return error_message(self.error_code)
+
+
+class TaskEvent(Contract):
+    task_id: str
+    sequence: int
+    revision: int
+    status: TaskStatus
+    progress: TaskProgress
+    updated_at: datetime
+    error_code: str | None
+    result_available: bool
+    settled: bool
+
+    @computed_field
+    @property
+    def error_message(self) -> str | None:
+        return error_message(self.error_code)
+
+    @classmethod
+    def from_record(cls, task):
+        return cls(
+            task_id=task.id,
+            sequence=task.event_sequence,
+            revision=task.revision,
+            status=task.status,
+            progress=task.progress,
+            updated_at=task.updated_at,
+            error_code=task.error_code,
+            result_available=task.result is not None,
+            settled=task.settled,
+        )
 
 
 class TaskError(Exception):
