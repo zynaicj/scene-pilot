@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, Header, Query
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -26,6 +26,8 @@ from scene_pilot.api.models import (
 from scene_pilot.api.runtime import PlanningRuntime
 from scene_pilot.api.service import TaskService
 from scene_pilot.api.store import TaskStore
+from scene_pilot.api.events import EventStreams
+from scene_pilot.api.errors import error_payload
 from scene_pilot.core.execution import ExecutionLimits
 
 
@@ -79,8 +81,10 @@ def create_app(
             finally:
                 store.close()
 
-    app = FastAPI(title="ScenePilot", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(title="ScenePilot", version="0.7.0", lifespan=lifespan)
     app.state.service = service
+    streams = EventStreams(service)
+    app.state.event_streams = streams
     app.add_middleware(BodyLimitMiddleware)
     app.add_middleware(
         TrustedHostMiddleware,
@@ -90,26 +94,26 @@ def create_app(
     @app.exception_handler(TaskError)
     async def task_error(request, exc):
         return JSONResponse(
-            status_code=exc.status_code, content={"error_code": exc.code}
+            status_code=exc.status_code, content=error_payload(exc.code)
         )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
         # Default validation responses echo input values; keep private input out of errors.
-        return JSONResponse(status_code=422, content={"error_code": "invalid_request"})
+        return JSONResponse(status_code=422, content=error_payload("invalid_request"))
 
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
         code = "request_too_large" if exc.status_code == 413 else "http_error"
-        return JSONResponse(status_code=exc.status_code, content={"error_code": code})
+        return JSONResponse(status_code=exc.status_code, content=error_payload(code))
 
     @app.exception_handler(Exception)
     async def internal_error(request, exc):
-        return JSONResponse(status_code=500, content={"error_code": "internal_error"})
+        return JSONResponse(status_code=500, content=error_payload("internal_error"))
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "0.6.0"}
+        return {"status": "ok", "version": "0.7.0"}
 
     @app.post("/tasks", response_model=TaskDetail, status_code=202)
     async def create(
@@ -130,6 +134,21 @@ def create_app(
     @app.get("/tasks/{task_id}", response_model=TaskDetail)
     async def get_task(task_id: UUID):
         return store.get(task_id.hex).detail()
+
+    @app.get(
+        "/tasks/{task_id}/events",
+        responses={
+            200: {"content": {"text/event-stream": {}}},
+            204: {"description": "Terminal event already received"},
+        },
+        response_class=Response,
+    )
+    async def task_events(
+        task_id: UUID,
+        last_event_id: str | None = Header(default=None, max_length=64),
+        after: str | None = Query(default=None, max_length=64),
+    ):
+        return streams.response(task_id.hex, last_event_id or after)
 
     @app.patch("/tasks/{task_id}/brief", response_model=TaskDetail)
     async def update_brief(task_id: UUID, body: UpdateBrief):
@@ -161,6 +180,7 @@ def create_app(
             status=task.status,
             result=task.result,
             error_code=task.error_code,
+            settled=task.settled,
         )
 
     return app
@@ -181,6 +201,7 @@ def main():
         port=args.port,
         workers=1,
         access_log=False,
+        timeout_graceful_shutdown=5,
     )
 
 

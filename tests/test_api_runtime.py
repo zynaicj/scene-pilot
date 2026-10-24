@@ -210,6 +210,28 @@ class APIRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("55 分钟 / 上限 40 分钟", result["final_text"])
         saved = self.app.state.service.store.get(task_id)
         self.assertEqual(saved.result.model_dump(mode="json"), result)
+        _, events, latest = self.app.state.service.store.events_after(task_id, 0)
+        phases = {event.progress.phase for event in events}
+        self.assertTrue(
+            {
+                "locating",
+                "planning",
+                "searching",
+                "routes",
+                "conditions",
+                "finalizing",
+                "completed",
+            }.issubset(phases)
+        )
+        self.assertTrue(latest.result_available)
+        self.assertTrue(latest.settled)
+        # Progress updates do not add user-content revisions or trigger extra planning.
+        self.assertGreater(latest.sequence, latest.revision)
+        payload = json.dumps(
+            [event.model_dump(mode="json") for event in events], ensure_ascii=False
+        )
+        self.assertNotIn("杭州东站", payload)
+        self.assertNotIn("119,30", payload)
 
     async def test_extraction_usage_can_exhaust_shared_budget_before_map_work(self):
         self.runtime.limits = ExecutionLimits(model_calls=1)

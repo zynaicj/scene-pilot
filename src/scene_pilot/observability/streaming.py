@@ -25,6 +25,7 @@ from scene_pilot.core.recommendation import (
     render_recommendation,
 )
 from scene_pilot.core.confirmation import ConfirmedBrief, resolve_departure
+from scene_pilot.core.progress import TaskProgress, progress_from_event
 
 SAFE_STOPS = (
     ExecutionBudgetExceeded,
@@ -94,6 +95,7 @@ class StreamObserver:
         *,
         limits: ExecutionLimits | None = None,
         require_evidence: bool = True,
+        on_progress=None,
     ):
         self.trace_dir = Path(trace_dir)
         self.emit = emit
@@ -116,6 +118,15 @@ class StreamObserver:
         self.status = "completed"
         self.metrics = {}
         self.recommendation = None
+        self.on_progress = on_progress
+
+    def _progress(self, progress):
+        if self.on_progress is not None and progress is not None:
+            try:
+                self.on_progress(progress)
+            except Exception:
+                # Display/notification failure must not restart or abort paid planning.
+                pass
 
     def _finish(self, context):
         self.metrics = dict(context.metrics)
@@ -192,6 +203,7 @@ class StreamObserver:
         }
         self._trace_file.write(json.dumps(data, ensure_ascii=False) + "\n")
         self._trace_file.flush()
+        self._progress(progress_from_event(event, fields))
 
     @staticmethod
     def _scope(namespace: tuple) -> str:
@@ -367,7 +379,16 @@ class StreamObserver:
             self._record("run_started")
             try:
                 self._check_input(context)
+                if (
+                    confirmed_brief
+                    and geocode_tool is not None
+                    and select_origin is not None
+                    and confirmed_brief.brief.transport_mode == "驾车"
+                    and confirmed_brief.brief.departure
+                ):
+                    self._progress(TaskProgress(phase="locating"))
                 waiting = await resolve_departure(context, geocode_tool, select_origin)
+                self._progress(TaskProgress(phase="planning"))
                 self.started += waiting
                 remaining = self.limits.timeout_seconds - (
                     time.perf_counter() - self.started

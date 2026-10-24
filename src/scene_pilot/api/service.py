@@ -6,6 +6,7 @@ from scene_pilot.api.models import ACTIVE, PlanningResult, TaskError
 from scene_pilot.core.confirmation import ConfirmedBrief, confirm_brief
 from scene_pilot.core.execution import ExecutionLimits
 from scene_pilot.core.photography import PhotographyBrief
+from scene_pilot.core.progress import TaskProgress
 
 
 class TaskService:
@@ -34,6 +35,7 @@ class TaskService:
         def finished(task):
             if self.jobs.get(task_id) is task:
                 self.jobs.pop(task_id, None)
+                self.store.settle(task_id)
                 choice = self.choices.pop(task_id, None)
                 if choice is not None and not choice.done():
                     choice.cancel()
@@ -62,6 +64,7 @@ class TaskService:
                 task.usage = extracted.usage
                 task.error_code = extracted.error_code
                 task.status = "awaiting_confirmation"
+                task.settled = True
 
             self.store.change(task_id, None, {"extracting"}, save)
         except asyncio.CancelledError:
@@ -122,6 +125,8 @@ class TaskService:
             if not task.confirmed_brief or not task.confirmation_id:
                 raise TaskError("confirmation_required")
             task.status = "running"
+            task.settled = False
+            task.progress = TaskProgress(phase="loading")
 
         task = self.store.change(task_id, revision, {"ready"}, start)
         self._spawn(task_id, self._plan(task))
@@ -144,6 +149,7 @@ class TaskService:
                 PlanningResult(
                     status="interrupted", error_code="origin_selection_expired"
                 ),
+                settled=False,
             )
             raise
         finally:
@@ -163,6 +169,7 @@ class TaskService:
             task.selected_origin_id = body.evidence_id
             task.origin_skipped = body.skip
             task.status = "running"
+            task.progress = TaskProgress(phase="planning")
 
         task = self.store.change(task_id, body.revision, {"awaiting_origin"}, select)
         future.set_result(body.evidence_id)
@@ -181,7 +188,12 @@ class TaskService:
             return await self._select_origin(task.id, options)
 
         try:
-            result = await self.runtime.plan(task.request, confirmed, choose)
+            result = await self.runtime.plan(
+                task.request,
+                confirmed,
+                choose,
+                on_progress=lambda progress: self.store.progress(task.id, progress),
+            )
             self._finish(task.id, result)
         except asyncio.CancelledError:
             pass
@@ -190,8 +202,9 @@ class TaskService:
                 task.id, PlanningResult(status="failed", error_code="planning_failed")
             )
 
-    def _finish(self, task_id, result):
+    def _finish(self, task_id, result, *, settled=True):
         def finish(task):
+            task.settled = settled
             if task.status in {"cancelled", "interrupted"}:
                 task.result = result.model_copy(
                     update={"status": task.status, "error_code": task.error_code}
